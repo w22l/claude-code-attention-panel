@@ -1,6 +1,6 @@
 {
   "name": "attention-panel",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Side pane listing the action items in the current project that need your attention",
   "license": "MIT",
   "types": "./types/index.d.ts",

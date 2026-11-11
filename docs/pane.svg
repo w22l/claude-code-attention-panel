@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" width="880" height="420" role="img" aria-labelledby="t d" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13">
   <title id="t">Illustration of the attention pane beside the chat</title>
-  <desc id="d">A terminal window split in two. The chat is on the left. On the right a pane titled Needs your attention lists open items in four groups: Blocked on you, Decide, Sign off and Review, each item with a detail line and a file path, followed by a count of done items.</desc>
+  <desc id="d">A terminal window split in two. The chat is on the left. On the right a pane titled Needs your attention lists numbered open items under four coloured headings: Blocked on you, Decide, Sign off and Review, each item with a detail line and a file path aligned under its title, followed by a count of done items.</desc>
   <rect width="880" height="420" rx="10" fill="#16181d"/>
   <rect width="880" height="30" rx="10" fill="#22252c"/>
   <rect y="20" width="880" height="10" fill="#22252c"/>
@@ -28,23 +28,23 @@
   <text x="436" y="49" fill="#e6edf3" font-weight="700">Needs your attention</text>
 
   <g>
-    <text x="436" y="84" fill="#e6edf3" font-weight="700">Blocked on you (1)</text>
-    <text x="436" y="104" fill="#c9d1d9">• Add the API key to .env</text>
-    <text x="452" y="122" fill="#7d8590">Only you can create this file.</text>
-    <text x="452" y="140" fill="#7d8590">/work/demo/.env.example</text>
+    <text x="436" y="84" fill="#ff6b80" font-weight="700">Blocked on you (1)</text>
+    <text x="436" y="104" fill="#ff6b80">1.</text><text x="460" y="104" fill="#c9d1d9">Add the API key to .env</text>
+    <text x="460" y="122" fill="#7d8590">Only you can create this file.</text>
+    <text x="460" y="140" fill="#7d8590">/work/demo/.env.example</text>
 
-    <text x="436" y="174" fill="#e6edf3" font-weight="700">Decide (1)</text>
-    <text x="436" y="194" fill="#c9d1d9">• Choose the hosting region</text>
-    <text x="452" y="212" fill="#7d8590">Two options are compared in the note.</text>
-    <text x="452" y="230" fill="#7d8590">/work/demo/docs/hosting.md</text>
+    <text x="436" y="174" fill="#ffc107" font-weight="700">Decide (1)</text>
+    <text x="436" y="194" fill="#ffc107">2.</text><text x="460" y="194" fill="#c9d1d9">Choose the hosting region</text>
+    <text x="460" y="212" fill="#7d8590">Two options are compared in the note.</text>
+    <text x="460" y="230" fill="#7d8590">/work/demo/docs/hosting.md</text>
 
-    <text x="436" y="264" fill="#e6edf3" font-weight="700">Sign off (1)</text>
-    <text x="436" y="284" fill="#c9d1d9">• Approve the release notes</text>
-    <text x="452" y="302" fill="#7d8590">/work/demo/docs/release-notes.md</text>
+    <text x="436" y="264" fill="#4eba65" font-weight="700">Sign off (1)</text>
+    <text x="436" y="284" fill="#4eba65">3.</text><text x="460" y="284" fill="#c9d1d9">Approve the release notes</text>
+    <text x="460" y="302" fill="#7d8590">/work/demo/docs/release-notes.md</text>
 
-    <text x="436" y="336" fill="#e6edf3" font-weight="700">Review (1)</text>
-    <text x="436" y="356" fill="#c9d1d9">• Read the migration plan</text>
-    <text x="452" y="374" fill="#7d8590">/work/demo/docs/migration-plan.md</text>
+    <text x="436" y="336" fill="#b1b9f9" font-weight="700">Review (1)</text>
+    <text x="436" y="356" fill="#b1b9f9">4.</text><text x="460" y="356" fill="#c9d1d9">Read the migration plan</text>
+    <text x="460" y="374" fill="#7d8590">/work/demo/docs/migration-plan.md</text>
 
     <text x="436" y="404" fill="#7d8590">1 done</text>
   </g>

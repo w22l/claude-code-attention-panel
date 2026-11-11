@@ -162,12 +162,14 @@ The file is a JSON array. Each item is an object:
 
 The pane groups open items by kind, in this order:
 
-| Kind | Heading in the pane | Use it for |
-|---|---|---|
-| `blocked` | Blocked on you | Work that cannot continue until you act |
-| `decision` | Decide | A choice that is yours to make |
-| `sign-off` | Sign off | Finished work waiting for your approval |
-| `review` | Review | Something worth reading, with no deadline |
+| Kind | Heading in the pane | Heading colour | Use it for |
+|---|---|---|---|
+| `blocked` | Blocked on you | Error colour (red in the default themes) | Work that cannot continue until you act |
+| `decision` | Decide | Warning colour (amber) | A choice that is yours to make |
+| `sign-off` | Sign off | Success colour (green) | Finished work waiting for your approval |
+| `review` | Review | Suggestion colour (blue) | Something worth reading, with no deadline |
+
+The colours are Claude Code theme colours, so they follow whichever theme you use. Open items are numbered down the pane, across the groups, so you can refer to one by number ("do item 3"). A long title, detail or path wraps under its own text, clear of the number.
 
 A complete example:
 

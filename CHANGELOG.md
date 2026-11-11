@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2
+
+- Section headings are coloured by kind, using Claude Code theme colours so they follow your theme.
+- Open items are numbered down the pane instead of bulleted.
+- Wrapped lines of a title, detail or path now align under the text, not under the number.
+
 ## 0.2.1
 
 - The pane and `/attention` now distinguish a missing list from one that is not a valid JSON array.

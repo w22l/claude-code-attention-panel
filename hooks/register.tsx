@@ -13,6 +13,13 @@ const LABEL: Record<ActionItem['kind'], string> = {
   review: 'Review',
 }
 const ORDER: ActionItem['kind'][] = ['blocked', 'decision', 'sign-off', 'review']
+// Theme keys, so the headings follow the person's Claude Code theme.
+const TINT: Record<ActionItem['kind'], 'error' | 'warning' | 'success' | 'suggestion'> = {
+  blocked: 'error',
+  decision: 'warning',
+  'sign-off': 'success',
+  review: 'suggestion',
+}
 
 const board = atom({ plugin: 'attention-panel', key: 'board' } as const, { items: [] } as Board, {
   shape: 'board-3',
@@ -85,8 +92,13 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
     const state = await read($, board)
-    const open = state.items.filter(item => !item.done)
-    const done = state.items.length - open.length
+    const shown = ORDER.flatMap(kind => state.items.filter(item => !item.done && item.kind === kind))
+    const done = state.items.filter(item => item.done).length
+    // One number per open item, counted down the pane, so "item 3" names one thing.
+    const numberOf = new Map(shown.map((item, index) => [item, index + 1]))
+    // The number sits in a column of its own: wrapped lines of the title, detail
+    // and path start under the text, never under the number.
+    const gutter = String(shown.length).length + 2
 
     return (
       <Box flexDirection="column">
@@ -102,24 +114,26 @@ export const register: Register = (on, options) => {
             <Text dimColor>Expected at: {state.source}</Text>
           </Box>
         )}
-        {!state.error && open.length === 0 && <Text dimColor>Nothing is waiting on you.</Text>}
+        {!state.error && shown.length === 0 && <Text dimColor>Nothing is waiting on you.</Text>}
         {ORDER.map(kind => {
-          const group = open.filter(item => item.kind === kind)
+          const group = shown.filter(item => item.kind === kind)
           if (group.length === 0) return null
 
           return (
             <Box flexDirection="column" marginBottom={1}>
-              <Text bold>
+              <Text bold color={TINT[kind]}>
                 {LABEL[kind]} ({group.length})
               </Text>
               {group.map(item => (
-                <Box flexDirection="column">
-                  <Text>
-                    {'• '}
-                    {item.title}
-                  </Text>
-                  {item.detail && <Text dimColor>{'  '}{item.detail}</Text>}
-                  {item.path && <Text dimColor>{'  '}{item.path}</Text>}
+                <Box flexDirection="row">
+                  <Box width={gutter} flexShrink={0}>
+                    <Text color={TINT[kind]}>{numberOf.get(item)}.</Text>
+                  </Box>
+                  <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                    <Text>{item.title}</Text>
+                    {item.detail && <Text dimColor>{item.detail}</Text>}
+                    {item.path && <Text dimColor>{item.path}</Text>}
+                  </Box>
                 </Box>
               ))}
             </Box>
