@@ -1,6 +1,6 @@
 {
   "name": "attention-panel",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Side pane listing the action items in the current project that need your attention",
   "license": "MIT",
   "types": "./types/index.d.ts",
@@ -10,6 +10,12 @@
       "title": "Action items file",
       "description": "Path of the JSON list, relative to the project root (an absolute path also works)",
       "default": ".claude/action-items.json"
+    },
+    "tellClaude": {
+      "type": "boolean",
+      "title": "Tell Claude when you answer",
+      "description": "After you accept or reject a recommendation in the pane, send Claude a short prompt so it acts on your answer straight away",
+      "default": true
     }
   },
   "author": {

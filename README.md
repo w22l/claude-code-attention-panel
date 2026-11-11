@@ -1,6 +1,6 @@
 # attention-panel
 
-A Claude Code mod that keeps a pane beside the chat listing what is waiting on you in the current project: things only you can do, decisions to make, work to sign off, and things to review. It also adds the `/attention` command.
+A Claude Code mod that keeps a pane beside the chat listing what is waiting on you in the current project: things only you can do, decisions to make, work to sign off, and things to review. Where Claude has a recommendation for an item, the pane shows it with **Accept** and **Reject** buttons. It also adds the `/attention` command.
 
 Long sessions bury the moments where Claude needs you. This pane keeps them in one place until you deal with them.
 
@@ -20,7 +20,7 @@ Long sessions bury the moments where Claude needs you. This pane keeps them in o
 
 ## How it works
 
-The mod does one thing: it reads a JSON file in your project and draws its open items. Claude (or you) edits the file; the pane re-reads it every five seconds.
+The mod reads a JSON file in your project and draws its open items. Claude (or you) edits the file; the pane re-reads it every five seconds. When you press Accept or Reject on a recommendation, the mod writes your answer onto that item in the file and tells Claude.
 
 ```mermaid
 flowchart LR
@@ -142,7 +142,50 @@ sequenceDiagram
 
 When something is dealt with, set `"done": true` on the item (or tell Claude it is done and let it update the file). The item leaves the open groups and is counted on the `N done` line at the bottom. Keeping resolved items in the file gives you a record; delete them whenever you want a clean slate.
 
-### 6. Use it in another project
+### 6. Answer Claude's recommendations with a click
+
+When Claude has a view on an item, it adds a `recommendation` to it. The pane then shows the recommendation under the item with two buttons:
+
+```
+2. Choose the hosting region
+   Two options are compared in the note.
+   /path/to/project/docs/hosting.md
+   Claude recommends: the nearer region.
+   [ Accept ]  [ Reject ]
+```
+
+Click a button (or move the focus to it and press Enter). Three things happen:
+
+1. The mod writes your answer onto the item in the list file: `"response": "accepted"` or `"rejected"`, with the time.
+2. The buttons are replaced by a line recording your answer, for example `You accepted: the nearer region.`
+3. The mod sends Claude a short prompt naming the item and your answer, so Claude acts on it straight away and then marks the item done.
+
+```mermaid
+sequenceDiagram
+    participant Claude
+    participant List as action-items.json
+    participant Pane
+    participant You
+    Claude->>List: add item with a recommendation
+    List-->>Pane: "Claude recommends: ..." [ Accept ] [ Reject ]
+    You->>Pane: click Accept
+    Pane->>List: response = accepted
+    Pane->>Claude: "I accepted your recommendation for item X"
+    Claude->>List: act on it, then set done to true
+```
+
+Rejecting does not tell Claude what you want instead; say that in the chat. If you would rather answer without Claude starting a turn, turn off the **Tell Claude when you answer** option: your answer is still saved in the file, and Claude sees it the next time it reads the list.
+
+To have Claude offer recommendations, extend the `CLAUDE.md` snippet from step 4 with:
+
+```
+When you have a view on an item, put it in the item's `recommendation` field as one
+short sentence. When an item has a `response` of accepted or rejected, act on it:
+carry out an accepted recommendation, ask what I want for a rejected one, then set
+`done` to true.
+```
+
+### 7. Use it in another project
 
 Nothing to install again if you chose user scope. Repeat steps 2 and 4 in the other project. Each project's pane shows only that project's list.
 
@@ -159,6 +202,9 @@ The file is a JSON array. Each item is an object:
 | `path` | no | The file or folder to look at. A full path is easiest to find from anywhere |
 | `since` | no | The date the item was raised |
 | `done` | no | `true` removes the item from the open groups and counts it as done |
+| `recommendation` | no | Claude's proposed answer, one short sentence. Shown with Accept and Reject buttons until answered |
+| `response` | written by the mod | `accepted` or `rejected`, set when you press a button |
+| `respondedAt` | written by the mod | When you answered, as an ISO timestamp |
 
 The pane groups open items by kind, in this order:
 
@@ -221,8 +267,9 @@ An item with a `kind` outside the four values is not shown. If the file is not a
 | Option | Default | Meaning |
 |---|---|---|
 | Action items file (`file`) | `.claude/action-items.json` | Where the list lives. A path relative to the project root, or an absolute path |
+| Tell Claude when you answer (`tellClaude`) | on | After you accept or reject a recommendation, send Claude a short prompt so it acts at once. Off: the answer is only saved in the file |
 
-Change it in the plugin's settings in the config menu. Use a relative path to give every project its own list at the same place, for example `docs/action-items.json`. An absolute path points every project at one shared list.
+Change them in the plugin's settings in the config menu. Use a relative path to give every project its own list at the same place, for example `docs/action-items.json`. An absolute path points every project at one shared list.
 
 ## Troubleshooting
 
@@ -234,13 +281,17 @@ Change it in the plugin's settings in the config menu. Use a relative path to gi
 | In a worktree the pane shows the main checkout's list | Intended: one list per project | Set an absolute path if you really want a per-worktree list |
 | An item is missing | Its `kind` is not one of the four values, or `done` is `true` | Correct the item |
 | "The action list is not a valid JSON array" | A syntax error, or the top level is not an array | Fix the file; the pane refreshes within five seconds |
+| A recommendation shows no buttons | The item already has a `response`, or `done` is `true` | Remove `response` from the item to ask again |
+| Pressing a button says the list could not be updated | The file changed to invalid JSON, or is not writable | Fix the file and press again |
 | `/attention` is not recognised | The mod is not installed or not active in this session | Run the install command again and check the scope |
 
 ## What the mod touches
 
 - It reads one file: the action list.
+- It writes to that same file, and only when you press Accept or Reject: it sets `response` and `respondedAt` on the one item and rewrites the file with two-space indentation. It never writes at any other time and touches no other file.
+- When you press a button it submits one prompt to Claude (unless you turn that option off). The prompt carries only the item's `id` and your answer, never the item's title, detail or recommendation text, so nothing written in the file is passed to Claude as if you had typed it.
 - It runs one command, `git rev-parse --git-common-dir`, in the project root, to find the main checkout.
-- It writes nothing, changes nothing in your project, and makes no network requests.
+- It makes no network requests.
 - It registers one command (`/attention`) and one pane.
 
 The whole mod is one short file, [`hooks/register.tsx`](hooks/register.tsx). Read it before installing; it takes two minutes.

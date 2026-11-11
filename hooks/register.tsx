@@ -22,7 +22,7 @@ const TINT: Record<ActionItem['kind'], 'error' | 'warning' | 'success' | 'sugges
 }
 
 const board = atom({ plugin: 'attention-panel', key: 'board' } as const, { items: [] } as Board, {
-  shape: 'board-3',
+  shape: 'board-4',
 })
 
 // The list belongs to the project the session is in. In a git worktree the
@@ -63,8 +63,48 @@ async function refresh($: EngineInterface, file: string): Promise<void> {
   }
 }
 
+// A press on Accept or Reject: the answer is written onto the item in the list
+// file, so it survives the session and Claude finds it there. The file is read
+// again first, so an edit made since the pane last drew is kept.
+async function respond(
+  $: EngineInterface,
+  file: string,
+  id: string,
+  response: 'accepted' | 'rejected',
+  isTelling: boolean,
+): Promise<void> {
+  const source = file.startsWith('/') ? file : `${await projectRoot($)}/${file}`
+  try {
+    const parsed: unknown = JSON.parse(String(await $.fs.read(source)))
+    if (!Array.isArray(parsed)) throw new Error('not an array')
+    const items = parsed as ActionItem[]
+    const item = items.find(one => one.id === id)
+    if (!item || item.done || !item.recommendation) {
+      await $.ui.toast('That item is no longer waiting for an answer.')
+    } else {
+      item.response = response
+      item.respondedAt = new Date().toISOString()
+      await $.fs.write(source, `${JSON.stringify(items, null, 2)}\n`)
+      await $.ui.toast(`Recommendation ${response}.`)
+      // Only the item's id and the answer are sent as a prompt, never the
+      // item's own text: what the file says must not arrive with the
+      // person's authority. An id that is not a plain token is left out.
+      if (isTelling) {
+        const name = /^[A-Za-z0-9._-]{1,64}$/.test(id) ? `"${id}"` : 'one item'
+        void $.prompt.submit({
+          text: `In the attention panel I ${response} your recommendation for action item ${name}. Read the item in ${file} and act on that answer, then update the list.`,
+        })
+      }
+    }
+  } catch {
+    await $.ui.toast('The action list could not be updated.')
+  }
+  await refresh($, file)
+}
+
 export const register: Register = (on, options) => {
   const file = typeof options.file === 'string' && options.file.trim() !== '' ? options.file.trim() : DEFAULT_FILE
+  const isTelling = options.tellClaude !== false
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -90,7 +130,7 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const { Box, Button, Text } = $.ui.resolve(e)
     const state = await read($, board)
     const shown = ORDER.flatMap(kind => state.items.filter(item => !item.done && item.kind === kind))
     const done = state.items.filter(item => item.done).length
@@ -133,6 +173,32 @@ export const register: Register = (on, options) => {
                     <Text>{item.title}</Text>
                     {item.detail && <Text dimColor>{item.detail}</Text>}
                     {item.path && <Text dimColor>{item.path}</Text>}
+                    {item.recommendation && !item.response && (
+                      <Box flexDirection="column">
+                        <Text color="claude">Claude recommends: {item.recommendation}</Text>
+                        <Box flexDirection="row" gap={1}>
+                          <Button
+                            key={`accept:${item.id}`}
+                            label="Accept"
+                            onPress={() => {
+                              void respond($, file, item.id, 'accepted', isTelling)
+                            }}
+                          />
+                          <Button
+                            key={`reject:${item.id}`}
+                            label="Reject"
+                            onPress={() => {
+                              void respond($, file, item.id, 'rejected', isTelling)
+                            }}
+                          />
+                        </Box>
+                      </Box>
+                    )}
+                    {item.recommendation && item.response && (
+                      <Text dimColor>
+                        You {item.response}: {item.recommendation}
+                      </Text>
+                    )}
                   </Box>
                 </Box>
               ))}

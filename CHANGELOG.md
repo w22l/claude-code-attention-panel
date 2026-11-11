@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0
+
+- Recommendations: an item may carry a `recommendation`. The pane shows it with Accept and Reject buttons.
+- Pressing a button writes `response` and `respondedAt` onto the item in the list file and, unless turned off, sends Claude a short prompt naming the item and the answer.
+- New option: Tell Claude when you answer.
+- Tests for accepting, rejecting and a missing list, run on the terminal and desktop surfaces.
+
 ## 0.2.2
 
 - Section headings are coloured by kind, using Claude Code theme colours so they follow your theme.

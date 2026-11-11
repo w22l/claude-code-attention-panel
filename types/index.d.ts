@@ -6,6 +6,9 @@ export type ActionItem = {
   path?: string
   since?: string
   done?: boolean
+  recommendation?: string
+  response?: 'accepted' | 'rejected'
+  respondedAt?: string
 }
 
 export type Board = { items: ActionItem[]; source?: string; error?: 'missing' | 'invalid'; readAt?: string }
