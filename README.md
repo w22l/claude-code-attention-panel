@@ -23,23 +23,47 @@ Long sessions bury the moments where Claude needs you. This pane keeps them in o
 The mod reads a JSON file in your project and draws its open items. Claude (or you) edits the file; the pane re-reads it every five seconds. When you press Accept or Reject on a recommendation, the mod writes your answer onto that item in the file and tells Claude.
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#16181d", "primaryTextColor": "#e6edf3", "primaryBorderColor": "#5c6370", "lineColor": "#8b949e", "edgeLabelBackground": "#16181d", "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"}}}%%
 flowchart LR
     A["Claude or you<br/>edit the list"] --> B[".claude/action-items.json<br/>in the project"]
     B -- "re-read every 5 seconds" --> C["attention-panel mod"]
     C --> D["Pane beside the chat"]
     E["/attention"] --> C
+    classDef claude fill:#16181d,stroke:#d97757,stroke-width:2px,color:#d97757
+    classDef file fill:#16181d,stroke:#ffc107,stroke-width:2px,color:#ffc107
+    classDef mod fill:#16181d,stroke:#b1b9f9,stroke-width:2px,color:#b1b9f9
+    classDef pane fill:#16181d,stroke:#4eba65,stroke-width:2px,color:#4eba65
+    classDef plain fill:#16181d,stroke:#5c6370,stroke-width:1px,color:#c9d1d9
+    class A claude
+    class B file
+    class C mod
+    class D pane
+    class E plain
+    linkStyle default stroke:#8b949e,color:#e6edf3
 ```
+
+The diagram colours match the pane: orange for Claude, amber for a decision, blue for the mod's own steps, green for what you end up seeing.
 
 Each project has its own list. If the session is in a git worktree, the mod reads the list from the main checkout, so a project has one list wherever the session happens to be:
 
 ```mermaid
+%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#16181d", "primaryTextColor": "#e6edf3", "primaryBorderColor": "#5c6370", "lineColor": "#8b949e", "edgeLabelBackground": "#16181d", "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"}}}%%
 flowchart TD
     S["Session's project root"] --> Q{"Inside a git<br/>repository?"}
     Q -- "no" --> R1["Use the project root"]
     Q -- "yes" --> G["Ask git for the<br/>main checkout"]
     G --> R2["Use the main checkout,<br/>even from a worktree"]
-    R1 --> F["Read .claude/action-items.json there"]
+    R1 --> F["Read .claude/action-items.json<br/>there"]
     R2 --> F
+    classDef plain fill:#16181d,stroke:#5c6370,stroke-width:1px,color:#c9d1d9
+    classDef decide fill:#16181d,stroke:#ffc107,stroke-width:2px,color:#ffc107
+    classDef mod fill:#16181d,stroke:#b1b9f9,stroke-width:2px,color:#b1b9f9
+    classDef pane fill:#16181d,stroke:#4eba65,stroke-width:2px,color:#4eba65
+    class S,R1,R2 plain
+    class Q decide
+    class G mod
+    class F pane
+    linkStyle default stroke:#8b949e,color:#e6edf3
 ```
 
 ## Requirements
@@ -123,21 +147,6 @@ full path of the file to look at. Set `done` to true when it is resolved; do not
 delete resolved items.
 ```
 
-From then on a typical loop looks like this:
-
-```mermaid
-sequenceDiagram
-    participant You
-    participant Claude
-    participant List as action-items.json
-    participant Pane
-    Claude->>List: add "Approve the release notes"
-    List-->>Pane: shown under Sign off
-    You->>Claude: "approved"
-    Claude->>List: set done to true
-    List-->>Pane: moves to the done count
-```
-
 ### 5. Resolve items
 
 When something is dealt with, set `"done": true` on the item (or tell Claude it is done and let it update the file). The item leaves the open groups and is counted on the `N done` line at the bottom. Keeping resolved items in the file gives you a record; delete them whenever you want a clean slate.
@@ -159,20 +168,6 @@ Click a button (or move the focus to it and press Enter). Three things happen:
 1. The mod writes your answer onto the item in the list file: `"response": "accepted"` or `"rejected"`, with the time.
 2. The buttons are replaced by a line recording your answer, for example `You accepted: the nearer region.`
 3. The mod sends Claude a short prompt naming the item and your answer, so Claude acts on it straight away and then marks the item done.
-
-```mermaid
-sequenceDiagram
-    participant Claude
-    participant List as action-items.json
-    participant Pane
-    participant You
-    Claude->>List: add item with a recommendation
-    List-->>Pane: "Claude recommends: ..." [ Accept ] [ Reject ]
-    You->>Pane: click Accept
-    Pane->>List: response = accepted
-    Pane->>Claude: "I accepted your recommendation for item X"
-    Claude->>List: act on it, then set done to true
-```
 
 Rejecting does not tell Claude what you want instead; say that in the chat. If you would rather answer without Claude starting a turn, turn off the **Tell Claude when you answer** option: your answer is still saved in the file, and Claude sees it the next time it reads the list.
 
