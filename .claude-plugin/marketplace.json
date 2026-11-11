@@ -1,0 +1,13 @@
+{
+  "name": "attention-panel",
+  "owner": {
+    "name": "w22l"
+  },
+  "plugins": [
+    {
+      "name": "attention-panel",
+      "source": "./"
+    }
+  ],
+  "description": "The attention-panel mod for Claude Code: a side pane of the current project's action items"
+}

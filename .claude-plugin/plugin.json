@@ -1,0 +1,26 @@
+{
+  "name": "attention-panel",
+  "version": "0.2.1",
+  "description": "Side pane listing the action items in the current project that need your attention",
+  "license": "MIT",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "file": {
+      "type": "string",
+      "title": "Action items file",
+      "description": "Path of the JSON list, relative to the project root (an absolute path also works)",
+      "default": ".claude/action-items.json"
+    }
+  },
+  "author": {
+    "name": "w22l"
+  },
+  "repository": "https://github.com/w22l/claude-code-attention-panel",
+  "homepage": "https://github.com/w22l/claude-code-attention-panel#readme",
+  "keywords": [
+    "pane",
+    "action-items",
+    "todo",
+    "attention"
+  ]
+}
