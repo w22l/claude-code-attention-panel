@@ -98,8 +98,6 @@ You will be asked, in order:
 
 When you see `Installed attention-panel. Plugin is now active.`, it is running. No restart is needed.
 
-> If the repository is private, the install works only on a machine that already holds a GitHub credential able to read it (an SSH key, or `gh auth login` followed by `gh auth setup-git`). The install never prompts for one.
-
 ### 2. Create the list for a project
 
 In the project's root folder, create `.claude/action-items.json` with an empty list:
