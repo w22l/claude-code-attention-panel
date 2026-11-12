@@ -4,6 +4,8 @@ A Claude Code mod that keeps a pane beside the chat listing what is waiting on y
 
 Long sessions bury the moments where Claude needs you. This pane keeps them in one place until you deal with them.
 
+The list keeps itself: the mod tells Claude about it in every project, gives Claude two tools to add and resolve items, and flags any answer that asks you for something without listing it. The status line shows how many items are open even when the pane is closed.
+
 ![Illustration of the attention pane beside the chat](docs/pane.svg)
 
 *An illustration of the layout with made-up items, not a screenshot.*
@@ -25,7 +27,7 @@ The mod reads a JSON file in your project and draws its open items. Claude (or y
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"primaryColor": "#16181d", "primaryTextColor": "#e6edf3", "primaryBorderColor": "#5c6370", "lineColor": "#8b949e", "edgeLabelBackground": "#16181d", "fontFamily": "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"}}}%%
 flowchart LR
-    A["Claude or you<br/>edit the list"] --> B[".claude/action-items.json<br/>in the project"]
+    A["Claude adds and resolves items<br/>(or you edit the list)"] --> B[".claude/action-items.json<br/>in the project"]
     B -- "re-read every 5 seconds" --> C["attention-panel mod"]
     C --> D["Pane beside the chat"]
     E["/attention"] --> C
@@ -41,6 +43,8 @@ flowchart LR
     class E plain
     linkStyle default stroke:#8b949e,color:#e6edf3
 ```
+
+Claude is told about the list in its system prompt and has two tools for it, so the left-hand box happens without any setup. If an answer asks you for something and the list did not change, the pane flags it.
 
 The diagram colours match the pane: orange for Claude, amber for a decision, blue for the mod's own steps, green for what you end up seeing.
 
@@ -98,9 +102,9 @@ You will be asked, in order:
 
 When you see `Installed attention-panel. Plugin is now active.`, it is running. No restart is needed.
 
-### 2. Create the list for a project
+### 2. The list for a project
 
-In the project's root folder, create `.claude/action-items.json` with an empty list:
+You can skip this step: Claude creates the list the first time it needs you. To start one yourself, create `.claude/action-items.json` in the project's root folder with an empty list:
 
 ```json
 []
@@ -121,7 +125,7 @@ Or start with one item:
 ]
 ```
 
-If the file does not exist yet, the pane says so and shows the exact path it is looking for, which is the quickest way to check you put it in the right place.
+While the file does not exist, the pane says nothing is waiting and shows the exact path where the list will be, which is the quickest way to check a hand-made file is in the right place.
 
 ### 3. Open the pane
 
@@ -133,9 +137,18 @@ Type:
 
 The pane opens and the command reports how many items are open and which file they came from. On a wide terminal the pane also opens by itself when a session starts; on a narrow one, use the command.
 
-### 4. Have Claude keep the list current
+### 4. Claude keeps the list current
 
-The pane is only as good as the list. Add this to the project's `CLAUDE.md` so Claude maintains it without being asked:
+You do not need to set anything up. In every project where the mod is active:
+
+- **Claude is told about the list.** The mod adds a short section to Claude's system prompt: add an item in the same turn in which you ask the person for something, and mark it done when it is settled. No line in `CLAUDE.md` is needed.
+- **Claude has two tools for it.** `attention_add` adds an item (or updates the one with that id) and `attention_resolve` marks one done. They create the file if it does not exist, keep every other entry as it is, and refuse to touch a file that is not valid JSON, so the list cannot be broken by a half-finished edit.
+- **A missed ask is flagged.** When Claude's answer asks you for something (a question, "let me know", "I need your approval") and the list did not change during that turn, the pane shows a line saying so, with two buttons: **Ask Claude to list it** sends Claude one short prompt to add what it asked for, and **Dismiss** clears the line. Turn on the *Ask Claude automatically* option to have the prompt sent without the press.
+- **You see it without the pane.** The status line shows `3 waiting on you` while anything is open, and a new item raises a toast once.
+
+The check for a missed ask is a list of phrases, in English and Chinese. It will sometimes flag an answer that only asked a rhetorical question; dismiss it. It is there for the case that matters: Claude waiting on you while the list says nothing is.
+
+To turn the instruction and the tools off and keep the list yourself, switch off *Tell Claude to keep the list*. A line in `CLAUDE.md` still works either way:
 
 ```
 Keep `.claude/action-items.json` current. Add an item whenever something needs me:
@@ -253,7 +266,12 @@ A complete example:
 ]
 ```
 
-An item with a `kind` outside the four values is not shown. If the file is not a valid JSON array, the pane says so and shows the file's path.
+Nothing in the file is dropped silently:
+
+- An item with a `kind` outside the four values is shown last, under **Other**.
+- An entry without an `id` or a `title` cannot be shown; the pane counts such entries on a line of its own.
+- If the file stops being a valid JSON array (a half-finished edit, say), the pane says so and keeps showing the last list it could read until the file is repaired.
+- If the file does not exist, the pane says nothing is waiting and where the list will be created.
 
 ## Options
 
@@ -261,6 +279,8 @@ An item with a `kind` outside the four values is not shown. If the file is not a
 |---|---|---|
 | Action items file (`file`) | `.claude/action-items.json` | Where the list lives. A path relative to the project root, or an absolute path |
 | Tell Claude when you answer (`tellClaude`) | on | After you accept or reject a recommendation, send Claude a short prompt so it acts at once. Off: the answer is only saved in the file |
+| Tell Claude to keep the list (`instructClaude`) | on | Add the instruction to Claude's system prompt and register the `attention_add` and `attention_resolve` tools. Off: the mod only reads the list |
+| Ask Claude automatically when an ask is missed (`autoCapture`) | off | When an answer asks you for something and the list did not change, send Claude the prompt to list it without waiting for you to press the button. Costs one short extra turn each time it fires |
 
 Change them in the plugin's settings in the config menu. Use a relative path to give every project its own list at the same place, for example `docs/action-items.json`. An absolute path points every project at one shared list.
 
@@ -269,25 +289,32 @@ Change them in the plugin's settings in the config menu. Use a relative path to 
 | What you see | Likely cause | What to do |
 |---|---|---|
 | The pane does not appear at start | The terminal is too narrow for a pane to open unasked | Run `/attention`, or widen the terminal |
-| "No action list for this project yet" | The file is missing at the path shown | Create the file at exactly that path, or change the `file` option |
+| "Nothing is waiting on you" with a path under it | The list does not exist yet | Nothing to do: Claude creates it at that path the first time it needs you. Change the `file` option to keep it elsewhere |
+| "Claude's last answer asked you for something that is not in this list" | The answer contained a question or a request and the list did not change in that turn | Press **Ask Claude to list it**, or **Dismiss** if it was not a real ask |
+| Claude never adds items | *Tell Claude to keep the list* is off, or the installed version is older than 0.4.0 | Turn the option on; update the plugin |
 | The pane shows a different project's items | The `file` option is an absolute path | Set it back to a relative path |
 | In a worktree the pane shows the main checkout's list | Intended: one list per project | Set an absolute path if you really want a per-worktree list |
-| An item is missing | Its `kind` is not one of the four values, or `done` is `true` | Correct the item |
-| "The action list is not a valid JSON array" | A syntax error, or the top level is not an array | Fix the file; the pane refreshes within five seconds |
+| An item is missing | `done` is `true`, or the entry has no `id` or `title` (the pane then shows "1 entry could not be shown") | Correct the item |
+| "The action list is not a valid JSON array" | A syntax error, or the top level is not an array | Fix the file; the pane refreshes within five seconds. Until then it shows the last list it could read |
 | A recommendation shows no buttons | The item already has a `response`, or `done` is `true` | Remove `response` from the item to ask again |
 | Pressing a button says the list could not be updated | The file changed to invalid JSON, or is not writable | Fix the file and press again |
 | `/attention` is not recognised | The mod is not installed or not active in this session | Run the install command again and check the scope |
 
 ## What the mod touches
 
-- It reads one file: the action list.
-- It writes to that same file, and only when you press Accept or Reject: it sets `response` and `respondedAt` on the one item and rewrites the file with two-space indentation. It never writes at any other time and touches no other file.
-- When you press a button it submits one prompt to Claude (unless you turn that option off). The prompt carries only the item's `id` and your answer, never the item's title, detail or recommendation text, so nothing written in the file is passed to Claude as if you had typed it.
+- It reads one file: the action list, every five seconds and at the start and end of each turn.
+- It writes to that same file in two cases, and touches no other file:
+  - when you press Accept or Reject: it sets `response` and `respondedAt` on the one item;
+  - when Claude calls `attention_add` or `attention_resolve`: it adds, updates or marks done the one item named. Every other entry, and every field it does not know, is written back unchanged. Claude's call goes through Claude Code's normal tool permission check.
+- It adds one section to Claude's system prompt, describing the list and when to update it. The section names the file path and nothing from the file.
+- It reads the text of Claude's final answer of each turn, in memory, to check it against a list of asking phrases. The answer is not stored, logged or sent anywhere.
+- It submits a prompt to Claude in two cases (three with *Ask Claude automatically* on): when you press Accept or Reject, and when you press **Ask Claude to list it**. Each prompt is fixed text plus, for a recommendation, the item's `id` and your answer. No title, detail, recommendation or answer text is ever included, so nothing written in the file or by Claude is passed back to Claude as if you had typed it.
+- It sets one status line entry and raises a toast when a new item appears. The toast shows the item's title.
 - It runs one command, `git rev-parse --git-common-dir`, in the project root, to find the main checkout.
 - It makes no network requests.
-- It registers one command (`/attention`) and one pane.
+- It registers one command (`/attention`), one pane and two tools.
 
-The whole mod is one short file, [`hooks/register.tsx`](hooks/register.tsx). Read it before installing; it takes two minutes.
+The whole mod is one file, [`hooks/register.tsx`](hooks/register.tsx). Read it before installing.
 
 ## Disclaimer
 

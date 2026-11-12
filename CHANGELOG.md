@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.0
+
+The list now keeps itself, in every project, without a line in `CLAUDE.md`.
+
+- Claude is told about the list in its system prompt: add an item in the same turn in which it asks you for something.
+- Two tools for Claude, `attention_add` and `attention_resolve`. They create the list when it does not exist, change one entry and keep the rest, and refuse to rewrite a file that is not valid JSON.
+- A missed ask is flagged: when an answer asks you for something and the list did not change in that turn, the pane shows a line with **Ask Claude to list it** and **Dismiss**.
+- The status line shows how many items are open; a new item raises a toast once.
+- Nothing vanishes: an item with an unknown `kind` is shown under **Other**; entries without an `id` or `title` are counted on a line of their own; a file that stops parsing leaves the last good list on screen, marked as stale.
+- A missing list is no longer worded as a problem: the pane says nothing is waiting and where the list will be created.
+- New options: Tell Claude to keep the list (on), Ask Claude automatically when an ask is missed (off).
+- Thirteen new tests.
+
 ## 0.3.0
 
 - Recommendations: an item may carry a `recommendation`. The pane shows it with Accept and Reject buttons.
