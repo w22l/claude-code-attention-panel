@@ -180,7 +180,7 @@ test('attention_add keeps entries and fields it does not know, and reopens a don
     on,
     JSON.stringify([
       { note: 'not an item' },
-      { id: 'old', kind: 'review', title: 'Old', done: true, owner: 'kwl', recommendation: 'Do A', response: 'accepted', respondedAt: 't' },
+      { id: 'old', kind: 'review', title: 'Old', done: true, owner: 'sam', recommendation: 'Do A', response: 'accepted', respondedAt: 't' },
     ]),
   )
   await $.session.start(START)
@@ -190,7 +190,7 @@ test('attention_add keeps entries and fields it does not know, and reopens a don
   const list = saved(world)
   expect(list[0]).toEqual({ note: 'not an item' })
   expect(list[1]?.done).toBe(false)
-  expect(list[1]?.owner).toBe('kwl')
+  expect(list[1]?.owner).toBe('sam')
   // A new recommendation is a new question: the old answer does not carry over.
   expect(list[1]?.recommendation).toBe('Do B')
   expect(list[1]?.response).toBeUndefined()
