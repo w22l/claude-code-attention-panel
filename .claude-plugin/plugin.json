@@ -1,6 +1,6 @@
 {
   "name": "attention-panel",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Side pane listing the action items in the current project that need your attention",
   "license": "MIT",
   "types": "./types/index.d.ts",
@@ -16,6 +16,18 @@
       "title": "Tell Claude when you answer",
       "description": "After you accept or reject a recommendation in the pane, send Claude a short prompt so it acts on your answer straight away",
       "default": true
+    },
+    "instructClaude": {
+      "type": "boolean",
+      "title": "Tell Claude to keep the list",
+      "description": "Add a short instruction to Claude's system prompt and give it two tools (attention_add, attention_resolve), so the list is kept in every project without a line in CLAUDE.md",
+      "default": true
+    },
+    "autoCapture": {
+      "type": "boolean",
+      "title": "Ask Claude automatically when an ask is missed",
+      "description": "When Claude's answer asks you for something and the list did not change, send Claude a short prompt to list it. Off: the pane shows a line with a button instead",
+      "default": false
     }
   },
   "author": {
