@@ -22,7 +22,8 @@ export type Board = {
   skipped?: number
   // The file is not valid JSON right now and `items` is the last list that could be read.
   isStale?: boolean
-  // Claude's last answer asked the person for something and the list did not change in that turn.
+  // An answer of Claude's asked the person for something and no item was added in that turn.
+  // Stays until an item is added, the person asks Claude to list it, or dismisses it.
   isUncaptured?: boolean
 }
 

@@ -143,7 +143,7 @@ You do not need to set anything up. In every project where the mod is active:
 
 - **Claude is told about the list.** The mod adds a short section to Claude's system prompt: add an item in the same turn in which you ask the person for something, and mark it done when it is settled. No line in `CLAUDE.md` is needed.
 - **Claude has two tools for it.** `attention_add` adds an item (or updates the one with that id) and `attention_resolve` marks one done. They create the file if it does not exist, keep every other entry as it is, and refuse to touch a file that is not valid JSON, so the list cannot be broken by a half-finished edit.
-- **A missed ask is flagged.** When Claude's answer asks you for something (a question, "let me know", "I need your approval") and the list did not change during that turn, the pane shows a line saying so, with two buttons: **Ask Claude to list it** sends Claude one short prompt to add what it asked for, and **Dismiss** clears the line. Turn on the *Ask Claude automatically* option to have the prompt sent without the press.
+- **A missed ask is flagged.** When Claude's answer asks you for something (a question, "let me know", "I need your approval") and no item was added during that turn, the pane shows a line saying so, which stays until an item is added or you clear it, with two buttons: **Ask Claude to list it** sends Claude one short prompt to add what it asked for, and **Dismiss** clears the line. Turn on the *Ask Claude automatically* option to have the prompt sent without the press.
 - **You see it without the pane.** The status line shows `3 waiting on you` while anything is open, and a new item raises a toast once.
 
 The check for a missed ask is a list of phrases, in English and Chinese. It will sometimes flag an answer that only asked a rhetorical question; dismiss it. It is there for the case that matters: Claude waiting on you while the list says nothing is.
@@ -290,7 +290,7 @@ Change them in the plugin's settings in the config menu. Use a relative path to 
 |---|---|---|
 | The pane does not appear at start | The terminal is too narrow for a pane to open unasked | Run `/attention`, or widen the terminal |
 | "Nothing is waiting on you" with a path under it | The list does not exist yet | Nothing to do: Claude creates it at that path the first time it needs you. Change the `file` option to keep it elsewhere |
-| "Claude's last answer asked you for something that is not in this list" | The answer contained a question or a request and the list did not change in that turn | Press **Ask Claude to list it**, or **Dismiss** if it was not a real ask |
+| "Claude asked you for something that is not in this list" | An answer contained a question or a request and no item was added in that turn | Press **Ask Claude to list it**, or **Dismiss** if it was not a real ask |
 | Claude never adds items | *Tell Claude to keep the list* is off, or the installed version is older than 0.4.0 | Turn the option on; update the plugin |
 | The pane shows a different project's items | The `file` option is an absolute path | Set it back to a relative path |
 | In a worktree the pane shows the main checkout's list | Intended: one list per project | Set an absolute path if you really want a per-worktree list |
@@ -305,7 +305,7 @@ Change them in the plugin's settings in the config menu. Use a relative path to 
 - It reads one file: the action list, every five seconds and at the start and end of each turn.
 - It writes to that same file in two cases, and touches no other file:
   - when you press Accept or Reject: it sets `response` and `respondedAt` on the one item;
-  - when Claude calls `attention_add` or `attention_resolve`: it adds, updates or marks done the one item named. Every other entry, and every field it does not know, is written back unchanged. Claude's call goes through Claude Code's normal tool permission check.
+  - when Claude calls `attention_add` or `attention_resolve`: it adds, updates or marks done the one item named. Every other entry, and every field it does not know, is written back unchanged. These two tools run without a permission prompt: the mod answers them itself, and the one list file is all they can change. Changes to the file take turns, so two of them at once cannot overwrite each other.
 - It adds one section to Claude's system prompt, describing the list and when to update it. The section names the file path and nothing from the file.
 - It reads the text of Claude's final answer of each turn, in memory, to check it against a list of asking phrases. The answer is not stored, logged or sent anywhere.
 - It submits a prompt to Claude in two cases (three with *Ask Claude automatically* on): when you press Accept or Reject, and when you press **Ask Claude to list it**. Each prompt is fixed text plus, for a recommendation, the item's `id` and your answer. No title, detail, recommendation or answer text is ever included, so nothing written in the file or by Claude is passed back to Claude as if you had typed it.

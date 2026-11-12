@@ -106,6 +106,29 @@ function parse(text: string): { items: ActionItem[]; skipped: number } {
   return { items, skipped: parsed.length - items.length }
 }
 
+// Every change to the list file is read-modify-write of the whole array, so the
+// writers (the two tools and a press on Accept or Reject) take turns: a second
+// one starts only when the first has written, and reads what it wrote.
+let writing: Promise<unknown> = Promise.resolve()
+
+function inTurn<T>(job: () => Promise<T>): Promise<T> {
+  const run = writing.then(job, job)
+  writing = run.catch(() => undefined)
+
+  return run
+}
+
+// The ids of the open items in the list's text; empty when there is no list
+// or it cannot be read.
+function openIds(text: string | undefined): Set<string> {
+  if (text === undefined) return new Set()
+  try {
+    return new Set(parse(text).items.filter(isOpen).map(item => item.id))
+  } catch {
+    return new Set()
+  }
+}
+
 // Module memory of which open items the person has been told about. It starts
 // over on a reload, when the first read fills it without a toast.
 let known: Set<string> | undefined
@@ -113,7 +136,9 @@ let known: Set<string> | undefined
 function announce($: EngineInterface, state: Board): void {
   const open = state.items.filter(isOpen)
   $.ui.status(open.length > 0 ? `${open.length} waiting on you` : undefined)
-  if (state.error) return
+  // A broken file says nothing about what is new. A missing one does: nothing
+  // is known yet, so the first item Claude adds is announced.
+  if (state.error === 'invalid') return
   const fresh = known === undefined ? [] : open.filter(item => !known?.has(item.id))
   known = new Set(open.map(item => item.id))
   if (fresh.length === 1) void $.ui.toast(`Waiting on you: ${fresh[0]?.title ?? ''}`)
@@ -138,14 +163,15 @@ async function refresh($: EngineInterface, file: string): Promise<void> {
   } catch {
     next = { items: [], source, error: 'missing' }
   }
-  next.isUncaptured = now.isUncaptured
   if (
     JSON.stringify(now.items) !== JSON.stringify(next.items) ||
     now.error !== next.error ||
     now.source !== next.source ||
     (now.skipped ?? 0) !== (next.skipped ?? 0)
   ) {
-    await update($, board, () => next)
+    // The flag is taken as it stands when the write lands, not as it stood
+    // before the file was read: a press or a turn's end may have changed it.
+    await update($, board, state => ({ ...next, isUncaptured: state.isUncaptured }))
   }
   announce($, next)
 }
@@ -279,9 +305,11 @@ export const register: Register = (on, options) => {
   const isInstructing = options.instructClaude !== false
   const isAutoCapturing = options.autoCapture === true
 
-  // The list as it stood when the turn began, and whether this turn is the
-  // mod's own capture request (which must never raise another).
-  let before: string | undefined
+  // The open items when the turn began, and whether this turn is the mod's own
+  // capture request (which must never raise another). The request is marked
+  // when it is sent, not recognised by its text, which a hook may rewrite.
+  let before = new Set<string>()
+  let isCapturePending = false
   let isCaptureTurn = false
 
   on('session.start', async ($, e, next) => {
@@ -330,8 +358,10 @@ export const register: Register = (on, options) => {
   // straight through, and stays untouched if this hook ever fails.
   on('tool.call', ($, e, next) => {
     const tool = String(e.tool)
-    if (tool === `mcp__attention-panel__${ADD_TOOL}`) return addItem($, file, e as Record<string, unknown>)
-    if (tool === `mcp__attention-panel__${RESOLVE_TOOL}`) return resolveItem($, file, e as Record<string, unknown>)
+    if (tool === `mcp__attention-panel__${ADD_TOOL}`) return inTurn(() => addItem($, file, e as Record<string, unknown>))
+    if (tool === `mcp__attention-panel__${RESOLVE_TOOL}`) {
+      return inTurn(() => resolveItem($, file, e as Record<string, unknown>))
+    }
 
     return next(e)
   }).catch(($, e, next) =>
@@ -354,8 +384,9 @@ export const register: Register = (on, options) => {
 
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined) {
-      before = await rawList($, file)
-      isCaptureTurn = e.text === captureRequest(file)
+      before = openIds(await rawList($, file))
+      isCaptureTurn = isCapturePending
+      isCapturePending = false
     }
 
     return next(e)
@@ -367,14 +398,19 @@ export const register: Register = (on, options) => {
   on('turn.complete', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId !== undefined || e.reason !== 'answer') return done
-    const after = await rawList($, file)
-    if (after !== before) {
+    // Only a new open item answers an ask. Any other change in the turn (an
+    // item resolved, a recommendation answered) leaves the ask unlisted.
+    const after = openIds(await rawList($, file))
+    const hasListed = [...after].some(id => !before.has(id))
+    await refresh($, file)
+    if (hasListed) {
       await setUncaptured($, false)
-      await refresh($, file)
     } else if (!isCaptureTurn && ASKS.test(e.answer)) {
       await setUncaptured($, true)
-      if (isAutoCapturing) void $.prompt.submit({ text: captureRequest(file) })
-      else void $.ui.toast('Claude asked you for something that is not in the attention list.')
+      if (isAutoCapturing) {
+        isCapturePending = true
+        void $.prompt.submit({ text: captureRequest(file) })
+      } else void $.ui.toast('Claude asked you for something that is not in the attention list.')
     }
 
     return done
@@ -384,7 +420,7 @@ export const register: Register = (on, options) => {
     await refresh($, file)
     await $.ui.open({ id: PANE, title: TITLE })
     const state = await read($, board)
-    const flagged = state.isUncaptured ? ' Claude’s last answer asked for something that is not listed.' : ''
+    const flagged = state.isUncaptured ? ' Claude asked you for something that is not listed.' : ''
     if (state.error === 'invalid') {
       return { text: `Attention pane opened, but the list is not a valid JSON array: ${state.source}${flagged}` }
     }
@@ -412,13 +448,14 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {state.isUncaptured && (
           <Box flexDirection="column" marginBottom={1}>
-            <Text color="warning">Claude’s last answer asked you for something that is not in this list.</Text>
+            <Text color="warning">Claude asked you for something that is not in this list.</Text>
             <Box flexDirection="row" gap={1}>
               <Button
                 key="capture"
                 label="Ask Claude to list it"
                 onPress={() => {
                   void setUncaptured($, false)
+                  isCapturePending = true
                   void $.prompt.submit({ text: captureRequest(file) })
                 }}
               />
@@ -472,14 +509,14 @@ export const register: Register = (on, options) => {
                             key={`accept:${item.id}`}
                             label="Accept"
                             onPress={() => {
-                              void respond($, file, item.id, 'accepted', isTelling)
+                              void inTurn(() => respond($, file, item.id, 'accepted', isTelling))
                             }}
                           />
                           <Button
                             key={`reject:${item.id}`}
                             label="Reject"
                             onPress={() => {
-                              void respond($, file, item.id, 'rejected', isTelling)
+                              void inTurn(() => respond($, file, item.id, 'rejected', isTelling))
                             }}
                           />
                         </Box>

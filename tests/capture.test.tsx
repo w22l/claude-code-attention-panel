@@ -310,7 +310,7 @@ test('an answer that asks for something while the list stayed the same is flagge
 
   const ui = await $.ui.mount(PANE)
   expect((await ui.find({ type: 'Text', text: /not in this list/ }))?.text).toBe(
-    'Claude’s last answer asked you for something that is not in this list.',
+    'Claude asked you for something that is not in this list.',
   )
   await ui.press({ key: 'capture' })
   expect(world.prompts.length).toBe(1)
@@ -322,7 +322,8 @@ test('an answer that asks for something while the list stayed the same is flagge
   await ui.unmount()
 
   // The turn that request starts is never flagged itself, whatever it answers.
-  await turn($, 'Listed. Anything else?', undefined, world.prompts[0])
+  // Its text is not what marks it: another plugin may have rewritten the prompt.
+  await turn($, 'Listed. Anything else?', undefined, 'a prompt some other hook rewrote')
   const after = await $.ui.mount(PANE)
   expect(await after.find({ type: 'Text', text: /not in this list/ })).toBeUndefined()
   await after.unmount()
@@ -390,4 +391,103 @@ test('other tools pass through the mod untouched', async ($, on) => {
   await $.session.start(START)
   const ran = await ($.tool as unknown as Tooling).call({ tool: 'Bash', command: 'ls' })
   expect(ran.result).toBe('ran Bash')
+})
+
+
+test('the first item of a list that did not exist yet is announced', async ($, on) => {
+  const world = session(on)
+  await $.session.start(START)
+  expect(world.toasts).toEqual([])
+
+  await ($.tool as unknown as Tooling).call({ tool: ADD, id: 'region', kind: 'decision', title: 'Choose the hosting region' })
+  expect(world.toasts).toEqual(['Waiting on you: Choose the hosting region'])
+  expect(world.statuses.at(-1)).toBe('1 waiting on you')
+})
+
+test('three adds sent at once all land: writers take turns', async ($, on) => {
+  const world = session(on)
+  await $.session.start(START)
+  const tool = $.tool as unknown as Tooling
+
+  await Promise.all(
+    ['a', 'b', 'c'].map(id => tool.call({ tool: ADD, id, kind: 'decision', title: `Decide ${id}` })),
+  )
+  expect(saved(world).map(one => one.id).sort()).toEqual(['a', 'b', 'c'])
+})
+
+test('an Accept pressed while Claude adds an item keeps both the answer and the item', async ($, on) => {
+  const world = session(
+    on,
+    JSON.stringify([{ id: 'region', kind: 'decision', title: 'Choose the hosting region', recommendation: 'Use the nearer region.' }]),
+  )
+  await $.session.start(START)
+  const ui = await $.ui.mount(PANE)
+
+  await Promise.all([
+    ($.tool as unknown as Tooling).call({ tool: ADD, id: 'notes', kind: 'sign-off', title: 'Approve the release notes' }),
+    ui.press({ key: 'accept:region' }),
+    ($.tool as unknown as Tooling).call({ tool: ADD, id: 'logo', kind: 'decision', title: 'Pick a logo' }),
+  ])
+  await world.clock.advance(5000)
+  await ui.unmount()
+
+  const list = saved(world)
+  expect(list.map(one => one.id).sort()).toEqual(['logo', 'notes', 'region'])
+  expect(list.find(one => one.id === 'region')?.response).toBe('accepted')
+})
+
+test('resolving an item or answering a recommendation does not hide a new ask', async ($, on) => {
+  const world = session(
+    on,
+    JSON.stringify([
+      { id: 'region', kind: 'decision', title: 'Choose the hosting region' },
+      { id: 'notes', kind: 'sign-off', title: 'Approve the release notes' },
+    ]),
+  )
+  await $.session.start(START)
+
+  // The list changes in the turn, but no open item is added: the new ask is still unlisted.
+  await turn($, 'Region is settled. Now, should I delete the old bucket?', async () => {
+    await ($.tool as unknown as Tooling).call({ tool: RESOLVE, id: 'region' })
+  })
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ type: 'Text', text: /not in this list/ }))?.text).toBe(
+    'Claude asked you for something that is not in this list.',
+  )
+  await ui.unmount()
+  expect(world.toasts.at(-1)).toBe('Claude asked you for something that is not in the attention list.')
+})
+
+test('with Ask Claude automatically on, a missed ask sends one prompt and the turn it starts sends none', { options: { autoCapture: true } }, async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  await turn($, 'Should I run the migration against production?')
+  expect(world.prompts.length).toBe(1)
+  expect(world.prompts[0]).toContain('attention_add')
+  expect(world.prompts[0]).not.toContain('migration')
+
+  // The capture turn answers with another question and still lists nothing: no second prompt, no loop.
+  await turn($, 'I could not tell what to list. Which one did you mean?', undefined, 'rewritten by another hook')
+  expect(world.prompts.length).toBe(1)
+
+  // A later, ordinary turn that asks again is caught again.
+  await turn($, 'Do you want me to continue?')
+  expect(world.prompts.length).toBe(2)
+})
+
+test('with Tell Claude to keep the list off, the mod adds nothing to the prompt and registers no tools', { options: { instructClaude: false } }, async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  const { sections } = await $.prompt.compose({
+    model: 'claude-test',
+    promptModel: 'claude-test',
+    surfaces: ['terminal'],
+    tools: [],
+    outputStyle: null,
+    traits: [],
+  })
+  expect(sections.map(s => s.id)).toEqual(['intro'])
+  expect(world.tools).toEqual([])
 })
