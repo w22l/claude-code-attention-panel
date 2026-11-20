@@ -531,3 +531,74 @@ test('each open item shows how long it has waited', async ($, on) => {
   expect(ages).toEqual(['today', '2d', '13d', '2w', '3w'])
   await ui.unmount()
 })
+
+test('an item written for 0.4.0 with a recommendation keeps Accept and Reject, whatever its kind', async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  for (const kind of ['review', 'blocked', 'sign-off', 'decision']) {
+    world.text = list({ id: 'old', kind, title: 'An old item', recommendation: 'Ship as is.' })
+    await $.command.run(ATTENTION)
+    world.prompts.length = 0
+    const ui = await $.ui.mount(PANE)
+    expect((await ui.find({ key: 'accept:old' }))?.text).toBe('Accept')
+    expect((await ui.find({ key: 'reject:old' }))?.text).toBe('Reject')
+
+    await ui.press({ key: 'reject:old' })
+    expect(saved(world)[0]?.response).toBe('rejected')
+    // Accepting or rejecting a recommendation never closes the item: Claude acts on it first.
+    expect(saved(world)[0]?.done).toBeUndefined()
+    expect(world.prompts[0]).toContain('rejected your recommendation')
+    await ui.unmount()
+  }
+})
+
+test('fields of the wrong type in a hand-edited item do not blank the pane', async ($, on) => {
+  const odd = [
+    { ...GATES, response: 'answered', selected: 'Lint' },
+    { ...HOSTING, response: 'answered', selected: null },
+    { ...URL, response: 'answered', note: 5 },
+    { ...NOTES, detail: { a: 1 }, path: ['x'], recommendation: { b: 2 } },
+    { ...LOGO, response: 7, since: {} },
+  ]
+  const world = session(on, list(...odd))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  for (const title of [/checks should block/, /hosting region/, /API base URL/, /release notes/, /Pick a logo/]) {
+    expect(await ui.find({ type: 'Text', text: title })).toBeDefined()
+  }
+  // What cannot be read as an answer is not one: the sign-off can still be approved.
+  await ui.press({ key: 'yes:notes' })
+  expect(saved(world)[3]?.response).toBe('accepted')
+  // The odd fields are written back as they were.
+  expect(saved(world)[3]?.detail).toEqual({ a: 1 })
+  await ui.unmount()
+})
+
+test('two ticks pressed before the pane redraws both count', async ($, on) => {
+  session(on, list(GATES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  await Promise.all([ui.press({ key: 'pick:checks:1' }), ui.press({ key: 'pick:checks:3' })])
+  expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 4 selected')
+  await ui.unmount()
+})
+
+test('an item Claude raises again after it was closed asks again, without the old answer', async ($, on) => {
+  const world = session(on, list(KEY))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'yes:key' })
+  expect(saved(world)[0]?.done).toBe(true)
+
+  await tool($).call({ tool: ADD, ...KEY })
+  const item = saved(world)[0] ?? {}
+  expect(item.done).toBe(false)
+  expect(item.response).toBeUndefined()
+  expect(item.respondedAt).toBeUndefined()
+  expect((await ui.find({ key: 'yes:key' }))?.text).toBe('Done')
+  await ui.unmount()
+})

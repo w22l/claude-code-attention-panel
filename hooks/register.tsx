@@ -129,20 +129,42 @@ type Entry = Record<string, unknown>
 // The array may hold anything a hand edit left in it: only an object is looked into.
 const isEntry = (one: unknown): one is Entry => typeof one === 'object' && one !== null && !Array.isArray(one)
 
+// An item as the pane draws it. The file may be edited by hand, so every field
+// the pane reads is taken only when it is of the type the pane expects: a
+// number where a sentence should be is left out, not drawn. The file itself is
+// never rewritten from this: a write starts from the entries as they are.
+function clean(one: Entry): ActionItem {
+  const str = (value: unknown): string | undefined => (typeof value === 'string' ? value : undefined)
+  const picked = (key: string): object => (str(one[key]) === undefined ? {} : { [key]: one[key] })
+  const responses = ['accepted', 'rejected', 'answered']
+  const hasSelected = Array.isArray(one.selected) && one.selected.every(label => typeof label === 'string')
+
+  return {
+    id: String(one.id),
+    kind: one.kind as Kind,
+    title: String(one.title),
+    ...picked('detail'),
+    ...picked('path'),
+    ...picked('since'),
+    ...picked('recommendation'),
+    ...picked('note'),
+    ...(one.done ? { done: true } : {}),
+    ...(one.answer === undefined || one.answer === null ? {} : { answer: one.answer as AnswerSpec }),
+    ...(responses.includes(one.response as string) ? { response: one.response as ActionItem['response'] } : {}),
+    ...(hasSelected ? { selected: one.selected as string[] } : {}),
+  }
+}
+
 // An entry is an item when it has an id and a title to show. Anything else in
 // the array is counted, so the pane can say that something was left out.
 function parse(text: string): { items: ActionItem[]; skipped: number } {
   const parsed: unknown = JSON.parse(text)
   if (!Array.isArray(parsed)) throw new Error('not an array')
-  const items = parsed.filter(
-    (one): one is ActionItem =>
-      typeof one === 'object' &&
-      one !== null &&
-      typeof (one as ActionItem).id === 'string' &&
-      (one as ActionItem).id !== '' &&
-      typeof (one as ActionItem).title === 'string' &&
-      (one as ActionItem).title !== '',
-  )
+  const items = parsed
+    .filter(
+      (one): one is Entry => isEntry(one) && typeof one.id === 'string' && one.id !== '' && typeof one.title === 'string' && one.title !== '',
+    )
+    .map(clean)
 
   return { items, skipped: parsed.length - items.length }
 }
@@ -209,7 +231,6 @@ async function refresh($: EngineInterface, file: string): Promise<void> {
     text = null
   }
   if (last?.source === source && last.text === text) return
-  last = { source, text }
   const now = await read($, board)
   let next: Board
   if (text === null) next = { items: [], source, error: 'missing' }
@@ -241,6 +262,8 @@ async function refresh($: EngineInterface, file: string): Promise<void> {
       await update($, drafts, all => Object.fromEntries(Object.entries(all).filter(([id]) => waiting.has(id))))
     }
   }
+  // Remembered only now: a read whose result did not reach the pane is made again.
+  last = { source, text }
   announce($, next)
 }
 
@@ -257,8 +280,14 @@ async function setUncaptured($: EngineInterface, isUncaptured: boolean): Promise
 type Changed = { source: string; entries: unknown[] } | { error: string; isRefused?: true }
 
 async function change($: EngineInterface, file: string, edit: (entries: unknown[]) => string | undefined): Promise<Changed> {
-  const source = await sourceOf($, file)
-  const raw = await rawList($, file)
+  let source = file
+  let raw: string | undefined
+  try {
+    source = await sourceOf($, file)
+    raw = await rawList($, file)
+  } catch {
+    return { error: `${source} could not be read.` }
+  }
   let entries: unknown[] = []
   if (raw !== undefined) {
     try {
@@ -276,7 +305,8 @@ async function change($: EngineInterface, file: string, edit: (entries: unknown[
   } catch {
     return { error: `${source} could not be written. Check that the file can be changed, then call this tool again.` }
   }
-  await refresh($, file)
+  // The change is in the file; a pane that could not be redrawn now is redrawn by the next read.
+  await refresh($, file).catch(() => undefined)
 
   return { source, entries }
 }
@@ -334,10 +364,13 @@ function formatOf(item: ActionItem): Format {
   if (spec && spec.type !== 'confirm') {
     return { ...plain, type: spec.type, options: spec.options ?? [], recommended: spec.recommended ?? [] }
   }
+  // A recommendation with no answer asked for is the question of 0.4.0: accept
+  // it or reject it, whatever the item's kind.
+  if (!spec && item.recommendation) return { ...plain, type: 'confirm', positive: 'Accept', negative: 'Reject' }
   if (item.kind === 'sign-off') return { ...plain, type: 'confirm', positive: 'Approve', negative: 'Reject' }
   if (item.kind === 'review') return { ...plain, type: 'confirm', positive: 'Reviewed', isClosing: true }
   if (item.kind === 'blocked') return { ...plain, type: 'confirm', positive: 'Done', isClosing: true }
-  if (spec || item.recommendation) return { ...plain, type: 'confirm', positive: 'Accept', negative: 'Reject' }
+  if (spec) return { ...plain, type: 'confirm', positive: 'Accept', negative: 'Reject' }
 
   return { ...plain, type: 'none' }
 }
@@ -347,6 +380,15 @@ function formatOf(item: ActionItem): Format {
 // longer offered does not count.
 const pickedOf = (format: Format, draft: Draft | undefined): string[] =>
   format.options.filter(label => (draft?.picked ?? format.recommended).includes(label))
+
+// A press on a tick. The change is worked out from the ticks as they stand
+// when it is written, not as they were drawn: two presses before a redraw both count.
+const toggle = ($: EngineInterface, id: string, format: Format, label: string): Promise<unknown> =>
+  update($, drafts, all => {
+    const now = pickedOf(format, all[id])
+
+    return { ...all, [id]: { ...all[id], picked: now.includes(label) ? now.filter(one => one !== label) : [...now, label] } }
+  })
 
 const setDraft = ($: EngineInterface, id: string, draft: Draft): Promise<unknown> =>
   update($, drafts, all => ({ ...all, [id]: { ...all[id], ...draft } }))
@@ -379,10 +421,12 @@ async function answer(
   let hasRecommendation = false
   const changed = await change($, file, entries => {
     const item = entryOf(entries, id)
-    if (!item || item.done || item.response) return GONE
-    if (shownOf(item as ActionItem) !== seen) return MOVED
-    const format = formatOf(item as ActionItem)
-    hasRecommendation = Boolean(item.recommendation)
+    // Judged as the pane reads it, so a field of the wrong type counts for nothing here too.
+    const view = item && clean(item)
+    if (!item || !view || view.done || view.response) return GONE
+    if (shownOf(view) !== seen) return MOVED
+    const format = formatOf(view)
+    hasRecommendation = Boolean(view.recommendation)
     if ('response' in reply) {
       if (format.type !== 'confirm' || (reply.response === 'rejected' && !format.negative)) return MOVED
       item.response = reply.response
@@ -476,9 +520,10 @@ async function addItem($: EngineInterface, file: string, input: Record<string, u
     } else {
       const old = entries[at] as Entry
       const merged: Entry = { ...old, ...fields, done: false }
-      // A new recommendation, or other options to pick from, is a new
-      // question: the answer to the old one goes.
+      // A new recommendation, other options to pick from, or an item raised
+      // again after it was closed is a new question: the answer to the old one goes.
       const isAsking =
+        Boolean(old.done) ||
         (fields.recommendation !== undefined && fields.recommendation !== old.recommendation) ||
         (answer !== undefined && JSON.stringify(answer) !== JSON.stringify(readAnswer(old.answer ?? undefined)))
       if (isAsking) for (const key of ['response', 'selected', 'note', 'respondedAt']) delete merged[key]
@@ -737,8 +782,7 @@ export const register: Register = (on, options) => {
                   label={`${picked.includes(label) ? '[x]' : '[ ]'} ${label}`}
                   plain
                   onPress={() => {
-                    const next = picked.includes(label) ? picked.filter(one => one !== label) : [...picked, label]
-                    void setDraft($, item.id, { picked: next })
+                    void toggle($, item.id, format, label)
                   }}
                 />
               ))}

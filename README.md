@@ -187,7 +187,7 @@ Sign off (1)
 
 | The question | What you see | What a press does |
 |---|---|---|
-| Yes or no (`confirm`) | Two buttons, worded for the kind: **Approve** / **Reject** on a sign-off, **Accept** / **Reject** elsewhere. A blocked item has one, **Done**; a review item one, **Reviewed** | Answers at once. **Done** and **Reviewed** also close the item |
+| Yes or no (`confirm`) | **Accept** / **Reject** under a recommendation. Otherwise worded for the kind: **Approve** / **Reject** on a sign-off; one button, **Done**, on a blocked item; one, **Reviewed**, on a review item | Answers at once. **Done** and **Reviewed** also close the item |
 | One of several (`choice`) | A button per option; the one Claude would pick is marked `(recommended)` | Answers at once with that option |
 | Several at once (`multi`) | A tick per option, with Claude's picks ticked to start, and **Submit N selected** | A press on an option ticks or unticks it; nothing is sent until Submit |
 | Something only you know (`text`) | A field | Enter sends what you typed |
@@ -250,7 +250,7 @@ The `answer` field:
 | `multi` | the same | any of the labels |
 | `text` | not used | not used |
 
-Without an `answer`, an item gets the yes-or-no buttons of its kind when it has a `recommendation` or is a sign-off, a review or a blocked item; a decision with no recommendation gets **Reply…** alone. An `answer` that breaks the rules above (a hand edit, say) is passed over and the item is drawn the same way; `attention_add` refuses such an answer and says what to put right. It also refuses an `id` that is not 1 to 64 letters, digits, dots, dashes or underscores.
+Without an `answer`, an item with a `recommendation` gets **Accept** and **Reject**, whatever its kind, as in 0.4.0. Without either, a sign-off, a review and a blocked item get the buttons of their kind, and a decision gets **Reply…** alone. An `answer` that breaks the rules above (a hand edit, say) is passed over and the item is drawn the same way; `attention_add` refuses such an answer and says what to put right. It also refuses an `id` that is not 1 to 64 letters, digits, dots, dashes or underscores.
 
 A complete example:
 
@@ -307,6 +307,7 @@ A complete example:
 Nothing in the file is dropped silently:
 
 - An item with a `kind` outside the four values is shown last, under **Other**.
+- A field of the wrong type (a number where a sentence should be) is left out of the drawing, and written back as it was.
 - An entry without an `id` or a `title` cannot be shown; the pane counts such entries on a line of its own.
 - When two items share an `id`, both are shown, the pane says so, and only the first has controls.
 - If the file stops being a valid JSON array (a half-finished edit, say), the pane says so and keeps showing the last list it could read until the file is repaired.
