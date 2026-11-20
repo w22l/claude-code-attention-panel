@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ActionItem, AnswerSpec, AnswerType, Board } from '../types'
+import type { ActionItem, AnswerSpec, AnswerType, Board, Draft, Drafts } from '../types'
 
 const PANE = 'attention'
 const TITLE = 'Needs your attention'
@@ -65,6 +65,9 @@ const instruction = (file: string): string =>
 const board = atom({ plugin: 'attention-panel', key: 'board' } as const, { items: [] } as Board, {
   shape: 'board-6',
 })
+
+// What the person has begun and not sent, by item id.
+const drafts = atom({ plugin: 'attention-panel', key: 'drafts' } as const, {} as Drafts, { shape: 'drafts-1' })
 
 const groupOf = (item: ActionItem): Group => (KINDS.includes(item.kind) ? item.kind : 'other')
 const isOpen = (item: ActionItem): boolean => !item.done
@@ -215,6 +218,12 @@ async function refresh($: EngineInterface, file: string): Promise<void> {
     // The flag is taken as it stands when the write lands, not as it stood
     // before the file was read: a press or a turn's end may have changed it.
     await update($, board, state => ({ ...next, isUncaptured: state.isUncaptured }))
+    // What was begun on an item that is gone, done or answered goes with it.
+    const waiting = new Set(next.items.filter(item => isOpen(item) && !item.response).map(item => item.id))
+    const begun = await read($, drafts)
+    if (Object.keys(begun).some(id => !waiting.has(id))) {
+      await update($, drafts, all => Object.fromEntries(Object.entries(all).filter(([id]) => waiting.has(id))))
+    }
   }
   announce($, next)
 }
@@ -317,6 +326,21 @@ function formatOf(item: ActionItem): Format {
   return { ...plain, type: 'none' }
 }
 
+// The options ticked on a multi: the person's own ticks once they have changed
+// one, and until then what Claude recommends. A tick for an option that is no
+// longer offered does not count.
+const pickedOf = (format: Format, draft: Draft | undefined): string[] =>
+  format.options.filter(label => (draft?.picked ?? format.recommended).includes(label))
+
+const setDraft = ($: EngineInterface, id: string, draft: Draft): Promise<unknown> =>
+  update($, drafts, all => ({ ...all, [id]: { ...all[id], ...draft } }))
+
+// What the pane draws of an item, as one string: the question as the person
+// saw it. An answer carries it, so a yes cannot land on wording that was
+// rewritten between the drawing and the press.
+const shownOf = (item: ActionItem): string =>
+  JSON.stringify([item.kind, item.title, item.detail, item.path, item.recommendation, formatOf(item)])
+
 // What the person gave as an answer: a yes or a no, the options picked, or
 // what they typed.
 type Reply = { response: 'accepted' | 'rejected' } | { selected: string[] } | { note: string }
@@ -328,11 +352,19 @@ const MOVED = 'The question changed; look again.'
 // survives the session and Claude finds it there. The file is read again
 // first, so an edit made since the pane last drew is kept; an answer to a
 // question that is no longer the one drawn is refused.
-async function answer($: EngineInterface, file: string, id: string, reply: Reply, isTelling: boolean): Promise<void> {
+async function answer(
+  $: EngineInterface,
+  file: string,
+  id: string,
+  seen: string,
+  reply: Reply,
+  isTelling: boolean,
+): Promise<void> {
   let hasRecommendation = false
   const changed = await change($, file, entries => {
     const item = entryOf(entries, id)
     if (!item || item.done || item.response) return GONE
+    if (shownOf(item as ActionItem) !== seen) return MOVED
     const format = formatOf(item as ActionItem)
     hasRecommendation = Boolean(item.recommendation)
     if ('response' in reply) {
@@ -629,6 +661,7 @@ export const register: Register = (on, options) => {
     const { Box, Button, Text } = $.ui.resolve(e)
     await loaded
     const state = await read($, board)
+    const begun = await read($, drafts)
     const shown = ORDER.flatMap(group => state.items.filter(item => isOpen(item) && groupOf(item) === group))
     const done = state.items.filter(item => item.done).length
     // One number per open item, counted down the pane, so "item 3" names one thing.
@@ -644,16 +677,61 @@ export const register: Register = (on, options) => {
     const controls = (item: ActionItem) => {
       const format = formatOf(item)
       const [yes, no] = item.recommendation ? ['accept', 'reject'] : ['yes', 'no']
+      const seen = shownOf(item)
       const give = (reply: Reply) => () => {
-        void inTurn(() => answer($, file, item.id, reply, isTelling))
+        void inTurn(() => answer($, file, item.id, seen, reply, isTelling))
       }
 
+      const picked = pickedOf(format, begun[item.id])
+
       return (
-        <Box flexDirection="row" gap={1}>
-          {format.type === 'confirm' && <Button key={`${yes}:${item.id}`} label={format.positive} onPress={give({ response: 'accepted' })} />}
-          {format.type === 'confirm' && format.negative && (
-            <Button key={`${no}:${item.id}`} label={format.negative} onPress={give({ response: 'rejected' })} />
+        <Box flexDirection="column">
+          {format.type === 'choice' && (
+            <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+              {format.options.map((label, index) => {
+                const isRecommended = format.recommended.includes(label)
+
+                return (
+                  <Button
+                    key={`pick:${item.id}:${index}`}
+                    label={isRecommended ? `${label} (recommended)` : label}
+                    {...(isRecommended ? { variant: 'primary' as const } : {})}
+                    onPress={give({ selected: [label] })}
+                  />
+                )
+              })}
+            </Box>
           )}
+          {format.type === 'multi' && (
+            <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
+              {format.options.map((label, index) => (
+                <Button
+                  key={`pick:${item.id}:${index}`}
+                  label={`${picked.includes(label) ? '[x]' : '[ ]'} ${label}`}
+                  plain
+                  onPress={() => {
+                    const next = picked.includes(label) ? picked.filter(one => one !== label) : [...picked, label]
+                    void setDraft($, item.id, { picked: next })
+                  }}
+                />
+              ))}
+            </Box>
+          )}
+          <Box flexDirection="row" gap={1}>
+            {format.type === 'confirm' && <Button key={`${yes}:${item.id}`} label={format.positive} onPress={give({ response: 'accepted' })} />}
+            {format.type === 'confirm' && format.negative && (
+              <Button key={`${no}:${item.id}`} label={format.negative} onPress={give({ response: 'rejected' })} />
+            )}
+            {format.type === 'multi' && picked.length > 0 && (
+              <Button
+                key={`submit:${item.id}`}
+                label={`Submit ${picked.length} selected`}
+                variant="primary"
+                onPress={give({ selected: picked })}
+              />
+            )}
+            {format.type === 'multi' && picked.length === 0 && <Text dimColor>Tick at least one.</Text>}
+          </Box>
         </Box>
       )
     }

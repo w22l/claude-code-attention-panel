@@ -46,8 +46,20 @@ export type Board = {
   isUncaptured?: boolean
 }
 
+// What the person has begun on an item and not sent: the options ticked on a
+// multi, and whether the field for a typed reply is open. Kept for the session,
+// never written to the list file.
+export type Draft = {
+  // Absent until a tick is changed: the recommended options then count as ticked.
+  picked?: string[]
+  isReplying?: boolean
+}
+
+// By item id.
+export type Drafts = Record<string, Draft>
+
 declare module 'claude-code' {
   interface PluginState {
-    'attention-panel': { board: Shaped<Board> }
+    'attention-panel': { board: Shaped<Board>; drafts: Shaped<Drafts> }
   }
 }

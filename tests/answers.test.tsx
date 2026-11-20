@@ -235,3 +235,179 @@ test('with Tell Claude when you answer off, an answer is saved and no prompt is 
   expect(saved(world)[1]?.done).toBe(true)
   expect(world.prompts.length).toBe(0)
 })
+
+const HOSTING = {
+  id: 'hosting',
+  kind: 'decision',
+  title: 'Choose the hosting region',
+  answer: { type: 'choice', options: ['Tokyo', 'Singapore', 'Frankfurt'], recommended: ['Tokyo'] },
+}
+const GATES = {
+  ...CHECKS,
+  answer: { type: 'multi', options: ['Lint', 'Unit tests', 'Type check', 'E2E'], recommended: ['Lint', 'Type check'] },
+}
+
+test('a choice is answered with one press, and the prompt names the item only', async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    world.text = list(HOSTING)
+    await $.command.run(ATTENTION)
+    world.prompts.length = 0
+    const ui = await $.ui.mount({ ...PANE, surface })
+    expect((await ui.find({ key: 'pick:hosting:0' }))?.text).toBe('Tokyo (recommended)')
+    expect((await ui.find({ key: 'pick:hosting:1' }))?.text).toBe('Singapore')
+    expect((await ui.find({ key: 'pick:hosting:2' }))?.text).toBe('Frankfurt')
+    expect(await ui.find({ key: 'submit:hosting' })).toBeUndefined()
+
+    await ui.press({ key: 'pick:hosting:1' })
+
+    const item = saved(world)[0] ?? {}
+    expect(item.response).toBe('answered')
+    expect(item.selected).toEqual(['Singapore'])
+    expect(typeof item.respondedAt).toBe('string')
+    expect(world.prompts.length).toBe(1)
+    expect(world.prompts[0]).toContain('"hosting"')
+    for (const label of ['Tokyo', 'Singapore', 'Frankfurt', 'region']) expect(world.prompts[0]).not.toContain(label)
+    expect((await ui.find({ type: 'Text', text: /^You chose/ }))?.text).toBe('You chose: Singapore')
+    expect(await ui.find({ key: 'pick:hosting:0' })).toBeUndefined()
+    await ui.unmount()
+  }
+})
+
+test('several options are ticked and sent together', async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    world.text = list(GATES)
+    await $.command.run(ATTENTION)
+    world.prompts.length = 0
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // What Claude recommends starts ticked.
+    expect((await ui.find({ key: 'pick:checks:0' }))?.text).toBe('[x] Lint')
+    expect((await ui.find({ key: 'pick:checks:1' }))?.text).toBe('[ ] Unit tests')
+    expect((await ui.find({ key: 'pick:checks:2' }))?.text).toBe('[x] Type check')
+    expect((await ui.find({ key: 'pick:checks:3' }))?.text).toBe('[ ] E2E')
+    expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 2 selected')
+
+    // A tick is not an answer: nothing is written until Submit.
+    await ui.press({ key: 'pick:checks:3' })
+    await ui.press({ key: 'pick:checks:1' })
+    expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 4 selected')
+    await ui.press({ key: 'pick:checks:0' })
+    expect((await ui.find({ key: 'pick:checks:0' }))?.text).toBe('[ ] Lint')
+    expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 3 selected')
+    expect(saved(world)[0]?.response).toBeUndefined()
+    expect(world.prompts.length).toBe(0)
+
+    await ui.press({ key: 'submit:checks' })
+    const item = saved(world)[0] ?? {}
+    expect(item.response).toBe('answered')
+    // In the order the options are listed, not the order they were ticked in.
+    expect(item.selected).toEqual(['Unit tests', 'Type check', 'E2E'])
+    expect(world.prompts.length).toBe(1)
+    expect(world.prompts[0]).not.toContain('E2E')
+    expect((await ui.find({ type: 'Text', text: /^You chose/ }))?.text).toBe('You chose: Unit tests, Type check, E2E')
+
+    // Change brings the question back with what Claude recommends, not the old ticks.
+    await ui.press({ key: 'change:checks' })
+    expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 2 selected')
+    await ui.unmount()
+  }
+})
+
+test('with nothing ticked there is nothing to submit', async ($, on) => {
+  session(on, list(GATES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'pick:checks:0' })
+  await ui.press({ key: 'pick:checks:2' })
+  expect(await ui.find({ key: 'submit:checks' })).toBeUndefined()
+  expect((await ui.find({ type: 'Text', text: /^Tick/ }))?.text).toBe('Tick at least one.')
+  await ui.unmount()
+})
+
+test('ticks outlive a re-read of the same list, and go when the options change', async ($, on) => {
+  const world = session(on, list(GATES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'pick:checks:3' })
+  await world.clock.advance(5000)
+  await $.command.run(ATTENTION)
+  expect((await ui.find({ key: 'pick:checks:3' }))?.text).toBe('[x] E2E')
+
+  // Claude rewrites the question: E2E is gone, a new option arrives unticked.
+  world.text = list({ ...GATES, answer: { type: 'multi', options: ['Lint', 'Unit tests', 'Type check', 'Smoke'], recommended: ['Lint'] } })
+  await world.clock.advance(5000)
+  expect((await ui.find({ key: 'pick:checks:3' }))?.text).toBe('[ ] Smoke')
+  expect((await ui.find({ key: 'submit:checks' }))?.text).toBe('Submit 2 selected')
+  await ui.unmount()
+})
+
+test('a pick from options that changed since the pane drew them is refused', async ($, on) => {
+  const world = session(on, list(HOSTING, GATES))
+  await $.session.start(START)
+  const ui = await $.ui.mount(PANE)
+
+  world.text = list({ ...HOSTING, answer: { type: 'choice', options: ['Tokyo', 'Sydney'] } }, { ...GATES, answer: { type: 'multi', options: ['Lint', 'Smoke'] } })
+  await ui.press({ key: 'pick:hosting:1' })
+  expect(world.toasts.at(-1)).toBe('The question changed; look again.')
+  // The pane has read the list again by now: the same press picks what is drawn.
+  expect((await ui.find({ key: 'pick:hosting:1' }))?.text).toBe('Sydney')
+
+  expect(world.writes.length).toBe(0)
+  expect(world.prompts.length).toBe(0)
+  await ui.unmount()
+})
+
+test('labels are matched as written: brackets, case and length do not confuse a pick', async ($, on) => {
+  const long = 'x'.repeat(60)
+  const world = session(on, list({ id: 'tag', kind: 'decision', title: 'Which tag?', answer: { type: 'choice', options: ['[beta]', 'Beta', 'beta ', long] } }))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'pick:tag:0' }))?.text).toBe('[beta]')
+  expect((await ui.find({ key: 'pick:tag:3' }))?.text).toBe(long)
+  await ui.press({ key: 'pick:tag:2' })
+  expect(saved(world)[0]?.selected).toEqual(['beta'])
+  await ui.unmount()
+})
+
+test('a yes to wording the person never saw is refused: the item is compared with what was drawn', async ($, on) => {
+  const world = session(on, list(REGION, NOTES))
+  await $.session.start(START)
+  const ui = await $.ui.mount(PANE)
+
+  // The recommendation is rewritten after the pane drew it, and before the press.
+  world.text = list({ ...REGION, recommendation: 'Use the cheapest region, and delete the old one.' }, NOTES)
+  await ui.press({ key: 'accept:region' })
+  expect(world.toasts.at(-1)).toBe('The question changed; look again.')
+  expect(world.writes.length).toBe(0)
+  expect(world.prompts.length).toBe(0)
+  // The pane now shows the new wording, and a press on that is an answer to it.
+  expect((await ui.find({ type: 'Text', text: /Claude recommends/ }))?.text).toBe(
+    'Claude recommends: Use the cheapest region, and delete the old one.',
+  )
+
+  // The same for a title, a detail or a path.
+  for (const edit of [{ title: 'Approve the deletion' }, { detail: 'Now includes the database.' }, { path: '/proj/other.md' }]) {
+    world.text = list(REGION, NOTES)
+    await $.command.run(ATTENTION)
+    world.text = list(REGION, { ...NOTES, ...edit })
+    await ui.press({ key: 'yes:notes' })
+    expect(world.toasts.at(-1)).toBe('The question changed; look again.')
+  }
+  expect(world.writes.length).toBe(0)
+
+  // A change to another item, or to a field the pane does not draw, is no change to this one.
+  world.text = list(REGION, NOTES)
+  await $.command.run(ATTENTION)
+  world.text = list({ ...REGION, title: 'Reworded' }, { ...NOTES, since: '2026-01-01', extra: 1 })
+  await ui.press({ key: 'yes:notes' })
+  expect(saved(world)[1]?.response).toBe('accepted')
+  await ui.unmount()
+})
