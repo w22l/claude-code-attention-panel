@@ -8,6 +8,8 @@ const TITLE = 'Needs your attention'
 const DEFAULT_FILE = '.claude/action-items.json'
 const ADD_TOOL = 'attention_add'
 const RESOLVE_TOOL = 'attention_resolve'
+// How long, in milliseconds, the session's start waits for the first read of the list.
+const START_WAIT = 1000
 type Kind = ActionItem['kind']
 type Group = Kind | 'other'
 const KINDS: Kind[] = ['blocked', 'decision', 'sign-off', 'review']
@@ -63,7 +65,7 @@ const plural = (count: number, one: string, many: string): string => `${count} $
 // The list belongs to the project the session is in. In a git worktree the
 // session's root is the worktree, so the list is looked up in the main
 // checkout: one list per project, whichever worktree the session moved to.
-async function projectRoot($: EngineInterface): Promise<string> {
+async function findRoot($: EngineInterface): Promise<string> {
   const root = await $.session.root()
   try {
     const git = await $.process.run(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: root })
@@ -76,6 +78,12 @@ async function projectRoot($: EngineInterface): Promise<string> {
   return root
 }
 
+// Asked once: the answer cannot change while the session lives, and the list
+// is read every few seconds.
+let root: Promise<string> | undefined
+
+const projectRoot = ($: EngineInterface): Promise<string> => (root ??= findRoot($))
+
 const sourceOf = async ($: EngineInterface, file: string): Promise<string> =>
   file.startsWith('/') ? file : `${await projectRoot($)}/${file}`
 
@@ -87,6 +95,11 @@ async function rawList($: EngineInterface, file: string): Promise<string | undef
     return undefined
   }
 }
+
+type Entry = Record<string, unknown>
+
+// The array may hold anything a hand edit left in it: only an object is looked into.
+const isEntry = (one: unknown): one is Entry => typeof one === 'object' && one !== null && !Array.isArray(one)
 
 // An entry is an item when it has an id and a title to show. Anything else in
 // the array is counted, so the pane can say that something was left out.
@@ -145,23 +158,44 @@ function announce($: EngineInterface, state: Board): void {
   if (fresh.length > 1) void $.ui.toast(`${fresh.length} new items are waiting on you.`)
 }
 
+// The ids that more than one item carries: a press can only name the first.
+function duplicatesOf(items: ActionItem[]): string[] {
+  const seen = new Set<string>()
+  const twice = new Set<string>()
+  for (const item of items) (seen.has(item.id) ? twice : seen).add(item.id)
+
+  return [...twice]
+}
+
+// What the last read found, so a file that has not changed costs one read and
+// nothing else. `null` is a file that was not there.
+let last: { source: string; text: string | null } | undefined
+
 async function refresh($: EngineInterface, file: string): Promise<void> {
-  const now = await read($, board)
-  let next: Board
   let source = file
+  let text: string | null = null
   try {
     source = await sourceOf($, file)
-    const text = String(await $.fs.read(source))
+    text = String(await $.fs.read(source))
+  } catch {
+    text = null
+  }
+  if (last?.source === source && last.text === text) return
+  last = { source, text }
+  const now = await read($, board)
+  let next: Board
+  if (text === null) next = { items: [], source, error: 'missing' }
+  else {
     try {
-      next = { ...parse(text), source, readAt: new Date().toISOString() }
+      const { items, skipped } = parse(text)
+      const duplicates = duplicatesOf(items)
+      next = { items, skipped, source, readAt: new Date().toISOString(), ...(duplicates.length > 0 ? { duplicates } : {}) }
     } catch {
       // A half-written or broken file must not blank the pane: the last list
       // that could be read stays up, marked as stale.
       const kept = now.source === source ? now.items : []
       next = { items: kept, source, error: 'invalid', isStale: kept.length > 0 }
     }
-  } catch {
-    next = { items: [], source, error: 'missing' }
   }
   if (
     JSON.stringify(now.items) !== JSON.stringify(next.items) ||
@@ -181,6 +215,41 @@ async function setUncaptured($: EngineInterface, isUncaptured: boolean): Promise
   if (Boolean(now.isUncaptured) !== isUncaptured) await update($, board, state => ({ ...state, isUncaptured }))
 }
 
+// Every writer (the two tools and a press in the pane) changes the list this
+// way: the whole array is read, one entry is changed and the array is written
+// back, so entries the pane cannot show and fields it does not know are kept as
+// they are. `edit` changes the entries in place, or returns why it will not.
+// Nothing here throws: a file that cannot be parsed or written is an answer.
+type Changed = { source: string; entries: unknown[] } | { error: string; isRefused?: true }
+
+async function change($: EngineInterface, file: string, edit: (entries: unknown[]) => string | undefined): Promise<Changed> {
+  const source = await sourceOf($, file)
+  const raw = await rawList($, file)
+  let entries: unknown[] = []
+  if (raw !== undefined) {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (!Array.isArray(parsed)) throw new Error('not an array')
+      entries = parsed
+    } catch {
+      return { error: `${source} is not a valid JSON array. Repair the file first (keep every item), then call this tool again.` }
+    }
+  }
+  const refusal = edit(entries)
+  if (refusal !== undefined) return { error: refusal, isRefused: true }
+  try {
+    await $.fs.write(source, `${JSON.stringify(entries, null, 2)}\n`)
+  } catch {
+    return { error: `${source} could not be written. Check that the file can be changed, then call this tool again.` }
+  }
+  await refresh($, file)
+
+  return { source, entries }
+}
+
+// The first entry with that id: the one a press or a tool call means.
+const entryOf = (entries: unknown[], id: string): Entry | undefined => entries.filter(isEntry).find(one => one.id === id)
+
 // A press on Accept or Reject: the answer is written onto the item in the list
 // file, so it survives the session and Claude finds it there. The file is read
 // again first, so an edit made since the pane last drew is kept.
@@ -191,48 +260,29 @@ async function respond(
   response: 'accepted' | 'rejected',
   isTelling: boolean,
 ): Promise<void> {
-  const source = await sourceOf($, file)
-  try {
-    const parsed: unknown = JSON.parse(String(await $.fs.read(source)))
-    if (!Array.isArray(parsed)) throw new Error('not an array')
-    const items = parsed as ActionItem[]
-    const item = items.find(one => one.id === id)
-    if (!item || item.done || !item.recommendation) {
-      await $.ui.toast('That item is no longer waiting for an answer.')
-    } else {
-      item.response = response
-      item.respondedAt = new Date().toISOString()
-      await $.fs.write(source, `${JSON.stringify(items, null, 2)}\n`)
-      await $.ui.toast(`Recommendation ${response}.`)
-      // Only the item's id and the answer are sent as a prompt, never the
-      // item's own text: what the file says must not arrive with the
-      // person's authority. An id that is not a plain token is left out.
-      if (isTelling) {
-        const name = /^[A-Za-z0-9._-]{1,64}$/.test(id) ? `"${id}"` : 'one item'
-        void $.prompt.submit({
-          text: `In the attention panel I ${response} your recommendation for action item ${name}. Read the item in ${file} and act on that answer, then update the list.`,
-        })
-      }
-    }
-  } catch {
-    await $.ui.toast('The action list could not be updated.')
+  const changed = await change($, file, entries => {
+    const item = entryOf(entries, id)
+    if (!item || item.done || !item.recommendation) return 'That item is no longer waiting for an answer.'
+    item.response = response
+    item.respondedAt = new Date().toISOString()
+
+    return undefined
+  })
+  if ('error' in changed) {
+    await $.ui.toast(changed.isRefused ? changed.error : 'The action list could not be updated.')
+    await refresh($, file)
+
+    return
   }
-  await refresh($, file)
-}
-
-// The two tools read the whole array, change one entry and write it back, so
-// entries the pane cannot show and fields it does not know are kept as they are.
-async function loadForWrite($: EngineInterface, file: string): Promise<{ source: string; entries: unknown[] } | string> {
-  const source = await sourceOf($, file)
-  const text = await rawList($, file)
-  if (text === undefined) return { source, entries: [] }
-  try {
-    const parsed: unknown = JSON.parse(text)
-    if (!Array.isArray(parsed)) throw new Error('not an array')
-
-    return { source, entries: parsed }
-  } catch {
-    return `${source} is not a valid JSON array. Repair the file first (keep every item), then call this tool again.`
+  await $.ui.toast(`Recommendation ${response}.`)
+  // Only the item's id and the answer are sent as a prompt, never the
+  // item's own text: what the file says must not arrive with the
+  // person's authority. An id that is not a plain token is left out.
+  if (isTelling) {
+    const name = /^[A-Za-z0-9._-]{1,64}$/.test(id) ? `"${id}"` : 'one item'
+    void $.prompt.submit({
+      text: `In the attention panel I ${response} your recommendation for action item ${name}. Read the item in ${file} and act on that answer, then update the list.`,
+    })
   }
 }
 
@@ -247,8 +297,6 @@ async function addItem($: EngineInterface, file: string, input: Record<string, u
   if (!kind || !KINDS.includes(kind as Kind)) {
     return { result: `kind must be one of ${KINDS.join(', ')}.`, isError: true }
   }
-  const loaded = await loadForWrite($, file)
-  if (typeof loaded === 'string') return { result: loaded, isError: true }
   const fields = {
     kind: kind as Kind,
     title,
@@ -256,45 +304,47 @@ async function addItem($: EngineInterface, file: string, input: Record<string, u
     ...(text(input.path) ? { path: text(input.path) } : {}),
     ...(text(input.recommendation) ? { recommendation: text(input.recommendation) } : {}),
   }
-  const at = loaded.entries.findIndex(one => typeof one === 'object' && one !== null && (one as ActionItem).id === id)
-  if (at === -1) {
-    loaded.entries.push({ id, ...fields, since: today(), done: false })
-  } else {
-    const old = loaded.entries[at] as ActionItem
-    const merged: ActionItem = { ...old, ...fields, done: false }
-    // A new recommendation is a new question: the answer to the old one goes.
-    if (fields.recommendation !== undefined && fields.recommendation !== old.recommendation) {
-      delete merged.response
-      delete merged.respondedAt
+  let isNew = false
+  const changed = await change($, file, entries => {
+    const at = entries.findIndex(one => isEntry(one) && one.id === id)
+    isNew = at === -1
+    if (isNew) {
+      entries.push({ id, ...fields, since: today(), done: false })
+    } else {
+      const old = entries[at] as Entry
+      const merged: Entry = { ...old, ...fields, done: false }
+      // A new recommendation is a new question: the answer to the old one goes.
+      if (fields.recommendation !== undefined && fields.recommendation !== old.recommendation) {
+        delete merged.response
+        delete merged.respondedAt
+      }
+      entries[at] = merged
     }
-    loaded.entries[at] = merged
-  }
-  await $.fs.write(loaded.source, `${JSON.stringify(loaded.entries, null, 2)}\n`)
-  await refresh($, file)
-  await setUncaptured($, false)
-  const open = loaded.entries.filter(one => typeof one === 'object' && one !== null && !(one as ActionItem).done).length
 
-  return { result: `${at === -1 ? 'Added' : 'Updated'} "${id}". ${plural(open, 'item is', 'items are')} open in ${loaded.source}.` }
+    return undefined
+  })
+  if ('error' in changed) return { result: changed.error, isError: true }
+  await setUncaptured($, false)
+  const open = changed.entries.filter(one => isEntry(one) && !one.done).length
+
+  return { result: `${isNew ? 'Added' : 'Updated'} "${id}". ${plural(open, 'item is', 'items are')} open in ${changed.source}.` }
 }
 
 async function resolveItem($: EngineInterface, file: string, input: Record<string, unknown>): Promise<{ result: string; isError?: true }> {
   const id = text(input.id)
   if (!id) return { result: 'Give the id of the item to mark done.', isError: true }
-  const loaded = await loadForWrite($, file)
-  if (typeof loaded === 'string') return { result: loaded, isError: true }
-  const item = loaded.entries.find(one => typeof one === 'object' && one !== null && (one as ActionItem).id === id) as
-    | ActionItem
-    | undefined
-  if (!item) {
-    const ids = loaded.entries
-      .map(one => (typeof one === 'object' && one !== null ? (one as ActionItem).id : undefined))
-      .filter(Boolean)
+  const changed = await change($, file, entries => {
+    const item = entryOf(entries, id)
+    if (!item) {
+      const ids = entries.filter(isEntry).map(one => one.id).filter(Boolean)
 
-    return { result: `No item "${id}". The list holds: ${ids.join(', ') || 'nothing'}.`, isError: true }
-  }
-  item.done = true
-  await $.fs.write(loaded.source, `${JSON.stringify(loaded.entries, null, 2)}\n`)
-  await refresh($, file)
+      return `No item "${id}". The list holds: ${ids.join(', ') || 'nothing'}.`
+    }
+    item.done = true
+
+    return undefined
+  })
+  if ('error' in changed) return { result: changed.error, isError: true }
 
   return { result: `Marked "${id}" done.` }
 }
@@ -311,6 +361,8 @@ export const register: Register = (on, options) => {
   let before = new Set<string>()
   let isCapturePending = false
   let isCaptureTurn = false
+  // The first read of the list, started when the session starts.
+  let loaded: Promise<unknown> = Promise.resolve()
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -347,8 +399,20 @@ export const register: Register = (on, options) => {
         isDeferred: false,
       })
     }
-    await refresh($, file)
-    $.clock.every(5000, () => refresh($, file))
+    // The start waits for the first read, but not for long: a slow disk or a
+    // slow git must not hold the session up. The pane and the timer wait for
+    // the read itself.
+    loaded = refresh($, file).catch(() => undefined)
+    await Promise.race([
+      loaded,
+      new Promise<void>(done => {
+        void $.clock.after(START_WAIT, () => done())
+      }),
+    ])
+    $.clock.every(5000, async () => {
+      await loaded
+      await refresh($, file)
+    })
     void $.ui.open({ id: PANE, title: TITLE })
 
     return next(e)
@@ -435,6 +499,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Button, Text } = $.ui.resolve(e)
+    await loaded
     const state = await read($, board)
     const shown = ORDER.flatMap(group => state.items.filter(item => isOpen(item) && groupOf(item) === group))
     const done = state.items.filter(item => item.done).length
@@ -443,6 +508,8 @@ export const register: Register = (on, options) => {
     // The number sits in a column of its own: wrapped lines of the title, detail
     // and path start under the text, never under the number.
     const gutter = String(shown.length).length + 2
+    // Of items sharing an id only the first is drawn with buttons: a press names an id.
+    const isFirst = (item: ActionItem): boolean => state.items.find(one => one.id === item.id) === item
 
     return (
       <Box flexDirection="column">
@@ -501,7 +568,7 @@ export const register: Register = (on, options) => {
                     <Text>{item.title}</Text>
                     {item.detail && <Text dimColor>{item.detail}</Text>}
                     {item.path && <Text dimColor>{item.path}</Text>}
-                    {item.recommendation && !item.response && (
+                    {item.recommendation && !item.response && isFirst(item) && (
                       <Box flexDirection="column">
                         <Text color="claude">Claude recommends: {item.recommendation}</Text>
                         <Box flexDirection="row" gap={1}>
@@ -533,6 +600,9 @@ export const register: Register = (on, options) => {
             </Box>
           )
         })}
+        {(state.duplicates ?? []).map(id => (
+          <Text color="warning">More than one item has the id "{id}"; a press answers the first.</Text>
+        ))}
         {Boolean(state.skipped) && (
           <Text color="warning">
             {plural(state.skipped ?? 0, 'entry', 'entries')} could not be shown: each needs an id and a title.

@@ -20,6 +20,8 @@ export type Board = {
   readAt?: string
   // Entries of the file that are not items (no id or no title): counted, never dropped silently.
   skipped?: number
+  // Ids that more than one item carries: a press can only mean the first of them.
+  duplicates?: string[]
   // The file is not valid JSON right now and `items` is the last list that could be read.
   isStale?: boolean
   // An answer of Claude's asked the person for something and no item was added in that turn.
