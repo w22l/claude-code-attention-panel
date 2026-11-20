@@ -112,3 +112,126 @@ test('Claude is told which answers it can ask for and where to read them', async
   const told = sections.at(-1)?.text ?? ''
   for (const word of ['answer_type', 'confirm', 'choice', 'multi', 'text', 'selected', 'note']) expect(told).toContain(word)
 })
+
+const NOTES = { id: 'notes', kind: 'sign-off', title: 'Approve the release notes' }
+const KEY = { id: 'key', kind: 'blocked', title: 'Add the API key to .env' }
+const PLAN = { id: 'plan', kind: 'review', title: 'Read the migration plan' }
+const REGION = { id: 'region', kind: 'decision', title: 'Choose the hosting region', recommendation: 'Use the nearer region.' }
+
+test('a sign-off without a recommendation can be approved or rejected in the pane', async ($, on) => {
+  const world = session(on, list(NOTES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'yes:notes' }))?.text).toBe('Approve')
+  expect((await ui.find({ key: 'no:notes' }))?.text).toBe('Reject')
+  // The old keys stay with items that carry a recommendation.
+  expect(await ui.find({ key: 'accept:notes' })).toBeUndefined()
+
+  await ui.press({ key: 'yes:notes' })
+  expect(saved(world)[0]?.response).toBe('accepted')
+  expect(saved(world)[0]?.done).toBeUndefined()
+  expect(world.prompts.length).toBe(1)
+  expect(world.prompts[0]).toContain('"notes"')
+  expect(world.prompts[0]).toContain('accepted')
+  expect(world.prompts[0]).not.toContain('release notes')
+  expect((await ui.find({ type: 'Text', text: /^You answered/ }))?.text).toBe('You answered: Approve')
+  expect(await ui.find({ key: 'yes:notes' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Done on a blocked item and Reviewed on a review item close it, and Claude is told', async ($, on) => {
+  const world = session(on, list(KEY, PLAN))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'yes:key' }))?.text).toBe('Done')
+  expect(await ui.find({ key: 'no:key' })).toBeUndefined()
+  expect((await ui.find({ key: 'yes:plan' }))?.text).toBe('Reviewed')
+  expect(await ui.find({ key: 'no:plan' })).toBeUndefined()
+
+  await ui.press({ key: 'yes:key' })
+  expect(saved(world)[0]?.response).toBe('accepted')
+  expect(saved(world)[0]?.done).toBe(true)
+  expect(world.prompts.length).toBe(1)
+  expect(world.prompts[0]).toContain('"key"')
+  // A closed item leaves the pane.
+  expect(await ui.find({ type: 'Text', text: /API key/ })).toBeUndefined()
+
+  await ui.press({ key: 'yes:plan' })
+  expect(saved(world)[1]?.done).toBe(true)
+  await ui.unmount()
+})
+
+test('an explicit confirm takes its buttons from the kind; a broken answer falls back to them', async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  for (const answer of [{ type: 'confirm' }, { type: 'rank' }, { type: 'multi', options: ['A'] }, { type: 'choice', options: [1, 2] }]) {
+    world.text = list({ ...NOTES, answer })
+    await $.command.run(ATTENTION)
+    const ui = await $.ui.mount(PANE)
+    expect((await ui.find({ key: 'yes:notes' }))?.text).toBe('Approve')
+    await ui.unmount()
+  }
+
+  // A decision asked as a confirm, with nothing recommended, is Accept or Reject.
+  world.text = list({ id: 'go', kind: 'decision', title: 'Ship it today?', answer: { type: 'confirm' } })
+  await $.command.run(ATTENTION)
+  const ui = await $.ui.mount(PANE)
+  expect((await ui.find({ key: 'yes:go' }))?.text).toBe('Accept')
+  expect((await ui.find({ key: 'no:go' }))?.text).toBe('Reject')
+  await ui.unmount()
+})
+
+test('an answer to a question that changed since the pane drew it is refused', async ($, on) => {
+  const world = session(on, list(NOTES, REGION))
+  await $.session.start(START)
+  const ui = await $.ui.mount(PANE)
+
+  // Resolved elsewhere.
+  world.text = list({ ...NOTES, done: true }, REGION)
+  await ui.press({ key: 'yes:notes' })
+  expect(saved(world)[0]?.response).toBeUndefined()
+  expect(world.toasts.at(-1)).toBe('That item is no longer waiting for an answer.')
+
+  // Answered elsewhere, and the pane has not read the file since: the first answer stands.
+  world.text = list({ ...NOTES, done: true }, { ...REGION, response: 'rejected' })
+  await ui.press({ key: 'accept:region' })
+  expect(saved(world)[1]?.response).toBe('rejected')
+  expect(world.prompts.length).toBe(0)
+  expect(world.writes.length).toBe(0)
+  await ui.unmount()
+})
+
+test('Change takes an answer back without telling Claude', async ($, on) => {
+  const world = session(on, list(REGION))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  expect(await ui.find({ key: 'change:region' })).toBeUndefined()
+  await ui.press({ key: 'reject:region' })
+  expect(world.prompts.length).toBe(1)
+  expect((await ui.find({ key: 'change:region' }))?.text).toBe('Change')
+
+  await ui.press({ key: 'change:region' })
+  expect(saved(world)[0]?.response).toBeUndefined()
+  expect(saved(world)[0]?.respondedAt).toBeUndefined()
+  expect(world.prompts.length).toBe(1)
+  expect((await ui.find({ key: 'accept:region' }))?.text).toBe('Accept')
+  await ui.unmount()
+})
+
+test('with Tell Claude when you answer off, an answer is saved and no prompt is sent', { options: { tellClaude: false } }, async ($, on) => {
+  const world = session(on, list(NOTES, KEY))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  await ui.press({ key: 'yes:notes' })
+  await ui.press({ key: 'yes:key' })
+  await ui.unmount()
+
+  expect(saved(world)[0]?.response).toBe('accepted')
+  expect(saved(world)[1]?.done).toBe(true)
+  expect(world.prompts.length).toBe(0)
+})

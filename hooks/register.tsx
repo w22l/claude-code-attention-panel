@@ -259,42 +259,6 @@ async function change($: EngineInterface, file: string, edit: (entries: unknown[
 // The first entry with that id: the one a press or a tool call means.
 const entryOf = (entries: unknown[], id: string): Entry | undefined => entries.filter(isEntry).find(one => one.id === id)
 
-// A press on Accept or Reject: the answer is written onto the item in the list
-// file, so it survives the session and Claude finds it there. The file is read
-// again first, so an edit made since the pane last drew is kept.
-async function respond(
-  $: EngineInterface,
-  file: string,
-  id: string,
-  response: 'accepted' | 'rejected',
-  isTelling: boolean,
-): Promise<void> {
-  const changed = await change($, file, entries => {
-    const item = entryOf(entries, id)
-    if (!item || item.done || !item.recommendation) return 'That item is no longer waiting for an answer.'
-    item.response = response
-    item.respondedAt = new Date().toISOString()
-
-    return undefined
-  })
-  if ('error' in changed) {
-    await $.ui.toast(changed.isRefused ? changed.error : 'The action list could not be updated.')
-    await refresh($, file)
-
-    return
-  }
-  await $.ui.toast(`Recommendation ${response}.`)
-  // Only the item's id and the answer are sent as a prompt, never the
-  // item's own text: what the file says must not arrive with the
-  // person's authority. An id that is not a plain token is left out.
-  if (isTelling) {
-    const name = /^[A-Za-z0-9._-]{1,64}$/.test(id) ? `"${id}"` : 'one item'
-    void $.prompt.submit({
-      text: `In the attention panel I ${response} your recommendation for action item ${name}. Read the item in ${file} and act on that answer, then update the list.`,
-    })
-  }
-}
-
 const text = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 
@@ -351,6 +315,81 @@ function formatOf(item: ActionItem): Format {
   if (spec || item.recommendation) return { ...plain, type: 'confirm', positive: 'Accept', negative: 'Reject' }
 
   return { ...plain, type: 'none' }
+}
+
+// What the person gave as an answer: a yes or a no, the options picked, or
+// what they typed.
+type Reply = { response: 'accepted' | 'rejected' } | { selected: string[] } | { note: string }
+
+const GONE = 'That item is no longer waiting for an answer.'
+const MOVED = 'The question changed; look again.'
+
+// An answer given in the pane is written onto the item in the list file, so it
+// survives the session and Claude finds it there. The file is read again
+// first, so an edit made since the pane last drew is kept; an answer to a
+// question that is no longer the one drawn is refused.
+async function answer($: EngineInterface, file: string, id: string, reply: Reply, isTelling: boolean): Promise<void> {
+  let hasRecommendation = false
+  const changed = await change($, file, entries => {
+    const item = entryOf(entries, id)
+    if (!item || item.done || item.response) return GONE
+    const format = formatOf(item as ActionItem)
+    hasRecommendation = Boolean(item.recommendation)
+    if ('response' in reply) {
+      if (format.type !== 'confirm' || (reply.response === 'rejected' && !format.negative)) return MOVED
+      item.response = reply.response
+      if (format.isClosing) item.done = true
+    } else if ('selected' in reply) {
+      const isOne = format.type === 'choice' && reply.selected.length === 1
+      const isSome = format.type === 'multi' && reply.selected.length > 0
+      if (!(isOne || isSome) || reply.selected.some(label => !format.options.includes(label))) return MOVED
+      item.response = 'answered'
+      // Kept in the order the options are listed, whatever order they were ticked in.
+      item.selected = format.options.filter(label => reply.selected.includes(label))
+    } else {
+      if (reply.note.trim() === '') return 'Type an answer first.'
+      item.response = 'answered'
+      item.note = reply.note
+    }
+    item.respondedAt = new Date().toISOString()
+
+    return undefined
+  })
+  if ('error' in changed) {
+    await $.ui.toast(changed.isRefused ? changed.error : 'The action list could not be updated.')
+    await refresh($, file)
+
+    return
+  }
+  const word = 'response' in reply ? reply.response : 'answered'
+  await $.ui.toast(hasRecommendation && 'response' in reply ? `Recommendation ${word}.` : 'Answer saved.')
+  // Only the item's id and, for a yes or a no, that word are sent as a prompt,
+  // never the item's own text, the options picked or what was typed: Claude
+  // reads those from the file, so nothing in the file arrives with the
+  // person's authority. An id that is not a plain token is left out.
+  if (isTelling) {
+    const name = SAFE_ID.test(id) ? `"${id}"` : 'one item'
+    const what = hasRecommendation && 'response' in reply ? `${word} your recommendation for action item ${name}` : `${word} action item ${name}`
+    void $.prompt.submit({
+      text: `In the attention panel I ${what}. Read the item in ${file} and act on that answer, then update the list.`,
+    })
+  }
+}
+
+// A press on Change: the answer comes off the item, and the pane asks again.
+// Claude is not told: there is nothing to act on until a new answer is given.
+async function reopen($: EngineInterface, file: string, id: string): Promise<void> {
+  const changed = await change($, file, entries => {
+    const item = entryOf(entries, id)
+    if (!item || item.done) return GONE
+    for (const key of ['response', 'selected', 'note', 'respondedAt']) delete item[key]
+
+    return undefined
+  })
+  if ('error' in changed) {
+    await $.ui.toast(changed.isRefused ? changed.error : 'The action list could not be updated.')
+    await refresh($, file)
+  }
 }
 
 async function addItem($: EngineInterface, file: string, input: Record<string, unknown>): Promise<{ result: string; isError?: true }> {
@@ -600,6 +639,52 @@ export const register: Register = (on, options) => {
     // Of items sharing an id only the first is drawn with buttons: a press names an id.
     const isFirst = (item: ActionItem): boolean => state.items.find(one => one.id === item.id) === item
 
+    // The buttons an unanswered item gets. An item that carries a
+    // recommendation keeps the keys it had before there were other answers.
+    const controls = (item: ActionItem) => {
+      const format = formatOf(item)
+      const [yes, no] = item.recommendation ? ['accept', 'reject'] : ['yes', 'no']
+      const give = (reply: Reply) => () => {
+        void inTurn(() => answer($, file, item.id, reply, isTelling))
+      }
+
+      return (
+        <Box flexDirection="row" gap={1}>
+          {format.type === 'confirm' && <Button key={`${yes}:${item.id}`} label={format.positive} onPress={give({ response: 'accepted' })} />}
+          {format.type === 'confirm' && format.negative && (
+            <Button key={`${no}:${item.id}`} label={format.negative} onPress={give({ response: 'rejected' })} />
+          )}
+        </Box>
+      )
+    }
+    // The line an answered item shows until Claude resolves it.
+    const answered = (item: ActionItem) => {
+      const format = formatOf(item)
+      const said =
+        item.note !== undefined
+          ? `You replied: ${item.note}`
+          : item.selected !== undefined
+            ? `You chose: ${item.selected.join(', ')}`
+            : item.recommendation
+              ? `You ${item.response}: ${item.recommendation}`
+              : `You answered: ${(item.response === 'rejected' ? format.negative : format.positive) ?? item.response}`
+
+      return (
+        <Box flexDirection="column">
+          <Text dimColor>{said}</Text>
+          <Box flexDirection="row">
+            <Button
+              key={`change:${item.id}`}
+              label="Change"
+              onPress={() => {
+                void inTurn(() => reopen($, file, item.id))
+              }}
+            />
+          </Box>
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column">
         {state.isUncaptured && (
@@ -657,32 +742,8 @@ export const register: Register = (on, options) => {
                     <Text>{item.title}</Text>
                     {item.detail && <Text dimColor>{item.detail}</Text>}
                     {item.path && <Text dimColor>{item.path}</Text>}
-                    {item.recommendation && !item.response && isFirst(item) && (
-                      <Box flexDirection="column">
-                        <Text color="claude">Claude recommends: {item.recommendation}</Text>
-                        <Box flexDirection="row" gap={1}>
-                          <Button
-                            key={`accept:${item.id}`}
-                            label="Accept"
-                            onPress={() => {
-                              void inTurn(() => respond($, file, item.id, 'accepted', isTelling))
-                            }}
-                          />
-                          <Button
-                            key={`reject:${item.id}`}
-                            label="Reject"
-                            onPress={() => {
-                              void inTurn(() => respond($, file, item.id, 'rejected', isTelling))
-                            }}
-                          />
-                        </Box>
-                      </Box>
-                    )}
-                    {item.recommendation && item.response && (
-                      <Text dimColor>
-                        You {item.response}: {item.recommendation}
-                      </Text>
-                    )}
+                    {item.recommendation && !item.response && <Text color="claude">Claude recommends: {item.recommendation}</Text>}
+                    {isFirst(item) && (item.response ? answered(item) : controls(item))}
                   </Box>
                 </Box>
               ))}
