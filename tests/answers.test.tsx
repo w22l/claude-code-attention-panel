@@ -411,3 +411,123 @@ test('a yes to wording the person never saw is refused: the item is compared wit
   expect(saved(world)[1]?.response).toBe('accepted')
   await ui.unmount()
 })
+
+const URL = { id: 'url', kind: 'blocked', title: 'What should the API base URL be?', answer: { type: 'text' } }
+const LOGO = { id: 'logo', kind: 'decision', title: 'Pick a logo' }
+
+test('a text item is answered by typing, and what was typed stays out of the prompt', async ($, on) => {
+  const world = session(on, '[]')
+  await $.session.start(START)
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    world.text = list(URL)
+    await $.command.run(ATTENTION)
+    world.prompts.length = 0
+    const ui = await $.ui.mount({ ...PANE, surface })
+    // The field is the control: no buttons beside it, though the item is "blocked".
+    expect(await ui.find({ key: 'yes:url' })).toBeUndefined()
+    expect(await ui.find({ key: 'reply:url' })).toBeUndefined()
+
+    await ui.input({ key: 'text:url', text: 'https://api.example.com' })
+
+    const item = saved(world)[0] ?? {}
+    expect(item.response).toBe('answered')
+    expect(item.note).toBe('https://api.example.com')
+    expect(item.selected).toBeUndefined()
+    expect(item.done).toBeUndefined()
+    expect(world.prompts.length).toBe(1)
+    expect(world.prompts[0]).toContain('"url"')
+    expect(world.prompts[0]).not.toContain('example.com')
+    expect((await ui.find({ type: 'Text', text: /^You replied/ }))?.text).toBe('You replied: https://api.example.com')
+    await ui.unmount()
+  }
+})
+
+test('Reply… answers any item in words, and Cancel puts the field away', async ($, on) => {
+  const world = session(on, list(HOSTING, LOGO, NOTES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  // Every item that is not itself a text field has the button, one with no other control included.
+  for (const id of ['hosting', 'logo', 'notes']) expect((await ui.find({ key: `reply:${id}` }))?.text).toBe('Reply…')
+  expect(await ui.find({ key: 'note:hosting' })).toBeUndefined()
+
+  await ui.press({ key: 'reply:logo' })
+  expect(await ui.find({ key: 'note:logo' })).toBeDefined()
+  expect(await ui.find({ key: 'reply:logo' })).toBeUndefined()
+  await ui.press({ key: 'cancel:logo' })
+  expect(await ui.find({ key: 'note:logo' })).toBeUndefined()
+  expect(world.writes.length).toBe(0)
+
+  await ui.press({ key: 'reply:hosting' })
+  await ui.input({ key: 'note:hosting', text: 'Neither, use Sydney' })
+  const item = saved(world)[0] ?? {}
+  expect(item.response).toBe('answered')
+  expect(item.note).toBe('Neither, use Sydney')
+  expect(item.selected).toBeUndefined()
+  expect(world.prompts.length).toBe(1)
+  expect(world.prompts[0]).not.toContain('Sydney')
+  expect((await ui.find({ type: 'Text', text: /^You replied/ }))?.text).toBe('You replied: Neither, use Sydney')
+
+  // Taken back, the question returns with its buttons and the field closed.
+  await ui.press({ key: 'change:hosting' })
+  expect((await ui.find({ key: 'pick:hosting:1' }))?.text).toBe('Singapore')
+  expect(await ui.find({ key: 'note:hosting' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('an empty reply is ignored; a long or many-lined one is kept whole', async ($, on) => {
+  const world = session(on, list(URL, LOGO))
+  await $.session.start(START)
+  const ui = await $.ui.mount(PANE)
+
+  await ui.input({ key: 'text:url', text: '   ' })
+  await ui.input({ key: 'text:url', text: '' })
+  expect(world.writes.length).toBe(0)
+  expect(world.prompts.length).toBe(0)
+
+  const long = 'a'.repeat(10000)
+  await ui.input({ key: 'text:url', text: long })
+  expect(saved(world)[0]?.note).toBe(long)
+  expect((world.prompts[0] ?? '').length < 300).toBe(true)
+
+  await ui.press({ key: 'reply:logo' })
+  await ui.input({ key: 'note:logo', text: 'The blue one.\nBut smaller,\nand without the tagline.' })
+  expect(saved(world)[1]?.note).toBe('The blue one.\nBut smaller,\nand without the tagline.')
+  await ui.unmount()
+})
+
+test('on mobile, where there is no field, buttons still answer and typed answers go to the chat', async ($, on) => {
+  const world = session(on, list(URL, HOSTING, NOTES, GATES))
+  await $.session.start(START)
+
+  const ui = await $.ui.mount({ ...PANE, surface: 'mobile' })
+  expect((await ui.find({ type: 'Text', text: /in the chat/ }))?.text).toBe('Answer this one in the chat.')
+  expect(await ui.find({ key: 'text:url' })).toBeUndefined()
+  for (const id of ['url', 'hosting', 'notes', 'checks']) expect(await ui.find({ key: `reply:${id}` })).toBeUndefined()
+
+  await ui.press({ key: 'pick:hosting:2' })
+  await ui.press({ key: 'yes:notes' })
+  await ui.press({ key: 'pick:checks:1' })
+  await ui.press({ key: 'submit:checks' })
+  expect(saved(world)[1]?.selected).toEqual(['Frankfurt'])
+  expect(saved(world)[2]?.response).toBe('accepted')
+  expect(saved(world)[3]?.selected).toEqual(['Lint', 'Unit tests', 'Type check'])
+  await ui.unmount()
+})
+
+test('each open item shows how long it has waited', async ($, on) => {
+  const at = (since: unknown, id: string): Entry => ({ id, kind: 'review', title: `Item ${id}`, since })
+  session(
+    on,
+    list(at('2026-11-20', 'a'), at('2026-11-18', 'b'), at('2026-11-07', 'c'), at('2026-11-06', 'd'), at('2026-10-30', 'e'), at('soon', 'f'), at('2026-12-01', 'g'), at(undefined, 'h'), at(20261120, 'i')),
+    Date.parse('2026-11-20T15:00:00Z'),
+  )
+  await $.session.start(START)
+
+  const ui = await $.ui.mount(PANE)
+  const ages = (await ui.findAll({ type: 'Text', text: /^(today|\d+[dw])$/ })).map(one => one.text)
+  // Days up to thirteen, then whole weeks; nothing for a date that is missing, unreadable or ahead.
+  expect(ages).toEqual(['today', '2d', '13d', '2w', '3w'])
+  await ui.unmount()
+})

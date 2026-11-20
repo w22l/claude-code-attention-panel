@@ -35,7 +35,8 @@ export type Tooling = { call: (input: Record<string, unknown>) => Promise<{ resu
 
 // A session in memory: one list file (undefined while it does not exist), and
 // a record of what the mod showed the person and sent to Claude.
-export function session(on: On, initial?: string) {
+// `now` sets the clock the mod reads, for what depends on the date.
+export function session(on: On, initial?: string, now?: number) {
   const world = {
     text: initial,
     writes: [] as string[],
@@ -48,7 +49,7 @@ export function session(on: On, initial?: string) {
     isUnwritable: false,
     // A read waits for this: a test holds it open to stand for a slow disk.
     gate: Promise.resolve() as Promise<void>,
-    clock: mock.clock(on),
+    clock: now === undefined ? mock.clock(on) : mock.clock(on, { now }),
   }
   on('command.register', () => ({ value: { command: 'attention' } }))
   on('tool.register', (_, e) => ({ value: { tool: `mcp__attention-panel__${e.name}` } }))

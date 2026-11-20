@@ -72,6 +72,22 @@ const drafts = atom({ plugin: 'attention-panel', key: 'drafts' } as const, {} as
 const groupOf = (item: ActionItem): Group => (KINDS.includes(item.kind) ? item.kind : 'other')
 const isOpen = (item: ActionItem): boolean => !item.done
 const today = (): string => new Date().toISOString().slice(0, 10)
+const DAY = 24 * 60 * 60 * 1000
+
+// How long an item has waited, from the date it was raised: today, then days,
+// then whole weeks from the fourteenth day. Nothing when the date is missing,
+// cannot be read, or is still to come.
+function ageOf(since: unknown, now: number): string | undefined {
+  if (typeof since !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(since)) return undefined
+  const raised = Date.parse(`${since.slice(0, 10)}T00:00:00Z`)
+  if (Number.isNaN(raised)) return undefined
+  const days = Math.floor((now - raised) / DAY)
+  if (days < 0) return undefined
+  if (days === 0) return 'today'
+
+  return days < 14 ? `${days}d` : `${Math.floor(days / 7)}w`
+}
+
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
 
 // The list belongs to the project the session is in. In a git worktree the
@@ -658,8 +674,14 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Button, Text } = $.ui.resolve(e)
+    const table = $.ui.resolve(e)
+    const { Box, Button, Text } = table
+    // The mobile app draws no field yet: there, a typed answer goes in the chat.
+    // The surface is asked as well as the table, which may name a field the
+    // surface then leaves out of the drawing.
+    const Input = e.surface !== 'mobile' && 'Input' in table ? table.Input : undefined
     await loaded
+    const now = await $.clock.now()
     const state = await read($, board)
     const begun = await read($, drafts)
     const shown = ORDER.flatMap(group => state.items.filter(item => isOpen(item) && groupOf(item) === group))
@@ -683,6 +705,11 @@ export const register: Register = (on, options) => {
       }
 
       const picked = pickedOf(format, begun[item.id])
+      const isReplying = Boolean(begun[item.id]?.isReplying)
+      // An empty line is not an answer; anything else is kept as it was typed.
+      const send = (typed: string): void => {
+        if (typed.trim() !== '') give({ note: typed })()
+      }
 
       return (
         <Box flexDirection="column">
@@ -731,7 +758,37 @@ export const register: Register = (on, options) => {
               />
             )}
             {format.type === 'multi' && picked.length === 0 && <Text dimColor>Tick at least one.</Text>}
+            {Input && format.type !== 'text' && !isReplying && (
+              <Button
+                key={`reply:${item.id}`}
+                label="Reply…"
+                dimColor
+                onPress={() => {
+                  void setDraft($, item.id, { isReplying: true })
+                }}
+              />
+            )}
           </Box>
+          {format.type === 'text' &&
+            (Input ? (
+              <Input key={`text:${item.id}`} placeholder="Type your answer" submitLabel="send" onSubmit={send} />
+            ) : (
+              <Text dimColor>Answer this one in the chat.</Text>
+            ))}
+          {Input && format.type !== 'text' && isReplying && (
+            <Box flexDirection="column">
+              <Input key={`note:${item.id}`} placeholder="Say it in your own words" submitLabel="send" autoFocus onSubmit={send} />
+              <Box flexDirection="row">
+                <Button
+                  key={`cancel:${item.id}`}
+                  label="Cancel"
+                  onPress={() => {
+                    void setDraft($, item.id, { isReplying: false })
+                  }}
+                />
+              </Box>
+            </Box>
+          )}
         </Box>
       )
     }
@@ -817,7 +874,16 @@ export const register: Register = (on, options) => {
                     <Text color={TINT[group]}>{numberOf.get(item)}.</Text>
                   </Box>
                   <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                    <Text>{item.title}</Text>
+                    <Box flexDirection="row" columnGap={1}>
+                      <Box flexShrink={1}>
+                        <Text>{item.title}</Text>
+                      </Box>
+                      {ageOf(item.since, now) !== undefined && (
+                        <Box flexShrink={0}>
+                          <Text dimColor>{ageOf(item.since, now)}</Text>
+                        </Box>
+                      )}
+                    </Box>
                     {item.detail && <Text dimColor>{item.detail}</Text>}
                     {item.path && <Text dimColor>{item.path}</Text>}
                     {item.recommendation && !item.response && <Text color="claude">Claude recommends: {item.recommendation}</Text>}
