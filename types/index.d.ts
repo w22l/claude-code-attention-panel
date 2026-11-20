@@ -1,3 +1,15 @@
+// The answer an item asks for. The pane draws a control for it: two buttons, one
+// button per option, a tick per option, or a field to type in.
+export type AnswerType = 'confirm' | 'choice' | 'multi' | 'text'
+
+export type AnswerSpec = {
+  type: AnswerType
+  // For choice and multi: two to eight labels, each different.
+  options?: string[]
+  // Labels from `options` that Claude would pick (one for choice).
+  recommended?: string[]
+}
+
 export type ActionItem = {
   id: string
   // One of the four known kinds. A list written by hand may hold another word:
@@ -9,7 +21,12 @@ export type ActionItem = {
   since?: string
   done?: boolean
   recommendation?: string
-  response?: 'accepted' | 'rejected'
+  answer?: AnswerSpec
+  // Written by the mod when the person answers in the pane. `answered` goes
+  // with `selected` (the options picked) or `note` (what was typed).
+  response?: 'accepted' | 'rejected' | 'answered'
+  selected?: string[]
+  note?: string
   respondedAt?: string
 }
 

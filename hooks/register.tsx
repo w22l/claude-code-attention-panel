@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { ActionItem, Board } from '../types'
+import type { ActionItem, AnswerSpec, AnswerType, Board } from '../types'
 
 const PANE = 'attention'
 const TITLE = 'Needs your attention'
@@ -22,6 +22,13 @@ const LABEL: Record<Group, string> = {
 }
 // An item whose kind is not one of the four is still shown, last, under "Other".
 const ORDER: Group[] = [...KINDS, 'other']
+// The answers an item can ask for, and what a list of options may hold.
+const ANSWERS: AnswerType[] = ['confirm', 'choice', 'multi', 'text']
+const MIN_OPTIONS = 2
+const MAX_OPTIONS = 8
+const MAX_LABEL = 60
+// An id the mod can name in a prompt it sends for the person.
+const SAFE_ID = /^[A-Za-z0-9._-]{1,64}$/
 // Theme keys, so the headings follow the person's Claude Code theme.
 const TINT: Record<Group, 'error' | 'warning' | 'success' | 'suggestion' | 'inactive'> = {
   blocked: 'error',
@@ -50,11 +57,13 @@ const instruction = (file: string): string =>
     `This project keeps a list of what is waiting on the person at ${file}; a pane beside the chat shows it.`,
     'Whenever you need something only they can give (a decision, a sign-off, a review, or a step only they can take), add it to the list in the same turn in which you ask, before you finish your reply. If a reply asks for three things, the list gains three items.',
     `Add an item with the ${ADD_TOOL} tool (id, kind, title, and where useful detail, path and recommendation); kind is one of blocked, decision, sign-off, review. Give path as a full path to the file to look at. When an item is settled, by them or by events, call ${RESOLVE_TOOL} with its id.`,
+    `Say what kind of answer you need with answer_type, so they can give it in the pane: confirm (yes or no), choice (one of the options you give), multi (any number of the options you give) or text (they type it). Give ${MIN_OPTIONS} to ${MAX_OPTIONS} short options for choice and multi, and name the ones you would pick in recommended.`,
+    'An item with a response has been answered in the pane: read its response, selected (the options they picked) and note (what they typed), act on that answer, then resolve the item.',
     'If you edit the file directly instead, keep it a JSON array and keep every other item as it is. Do not list work you can do yourself.',
   ].join('\n')
 
 const board = atom({ plugin: 'attention-panel', key: 'board' } as const, { items: [] } as Board, {
-  shape: 'board-5',
+  shape: 'board-6',
 })
 
 const groupOf = (item: ActionItem): Group => (KINDS.includes(item.kind) ? item.kind : 'other')
@@ -289,6 +298,61 @@ async function respond(
 const text = (value: unknown): string | undefined =>
   typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined
 
+// The answer an item asks for, as written in the file or given to the tool:
+// undefined when there is none, the cleaned-up answer when it can be drawn, and
+// otherwise a sentence saying what to put right.
+function readAnswer(value: unknown): AnswerSpec | string | undefined {
+  if (value === undefined) return undefined
+  if (!isEntry(value) || !ANSWERS.includes(value.type as AnswerType)) return `answer_type must be one of ${ANSWERS.join(', ')}.`
+  const type = value.type as AnswerType
+  if (type === 'confirm' || type === 'text') return { type }
+  const given: unknown[] = Array.isArray(value.options) ? value.options : []
+  const options = given.map(text)
+  if (
+    options.length < MIN_OPTIONS ||
+    options.length > MAX_OPTIONS ||
+    options.some(label => label === undefined || label.length > MAX_LABEL) ||
+    new Set(options).size !== options.length
+  ) {
+    return `${type} needs ${MIN_OPTIONS} to ${MAX_OPTIONS} options: short labels of at most ${MAX_LABEL} characters, each different.`
+  }
+  const labels = options as string[]
+  const wanted: unknown[] = Array.isArray(value.recommended) ? value.recommended : []
+  const named = wanted.map(text).filter((label): label is string => label !== undefined && labels.includes(label))
+  // A choice has one pick, the first Claude named; a multi keeps the options' order.
+  const recommended = type === 'choice' ? named.slice(0, 1) : labels.filter(label => named.includes(label))
+
+  return { type, options: labels, ...(recommended.length > 0 ? { recommended } : {}) }
+}
+
+// What the pane draws for an item, and what a press on it means.
+type Format = {
+  type: AnswerType | 'none'
+  options: string[]
+  recommended: string[]
+  // The words on the confirm buttons; a confirm with no negative has one button.
+  positive?: string
+  negative?: string
+  // A press on the positive button also marks the item done.
+  isClosing: boolean
+}
+
+function formatOf(item: ActionItem): Format {
+  const read = readAnswer(item.answer ?? undefined)
+  // An answer a hand edit broke is passed over: the item falls back to what its kind gets.
+  const spec = typeof read === 'object' ? read : undefined
+  const plain = { options: [], recommended: [], isClosing: false }
+  if (spec && spec.type !== 'confirm') {
+    return { ...plain, type: spec.type, options: spec.options ?? [], recommended: spec.recommended ?? [] }
+  }
+  if (item.kind === 'sign-off') return { ...plain, type: 'confirm', positive: 'Approve', negative: 'Reject' }
+  if (item.kind === 'review') return { ...plain, type: 'confirm', positive: 'Reviewed', isClosing: true }
+  if (item.kind === 'blocked') return { ...plain, type: 'confirm', positive: 'Done', isClosing: true }
+  if (spec || item.recommendation) return { ...plain, type: 'confirm', positive: 'Accept', negative: 'Reject' }
+
+  return { ...plain, type: 'none' }
+}
+
 async function addItem($: EngineInterface, file: string, input: Record<string, unknown>): Promise<{ result: string; isError?: true }> {
   const id = text(input.id)
   const title = text(input.title)
@@ -297,12 +361,24 @@ async function addItem($: EngineInterface, file: string, input: Record<string, u
   if (!kind || !KINDS.includes(kind as Kind)) {
     return { result: `kind must be one of ${KINDS.join(', ')}.`, isError: true }
   }
+  if (!SAFE_ID.test(id)) {
+    return { result: 'id must be 1 to 64 letters, digits, dots, dashes or underscores, with no spaces.', isError: true }
+  }
+  if (input.answer_type === undefined && input.options !== undefined) {
+    return { result: `Options need an answer_type: choice or multi.`, isError: true }
+  }
+  const answer =
+    input.answer_type === undefined
+      ? undefined
+      : readAnswer({ type: input.answer_type, options: input.options, recommended: input.recommended })
+  if (typeof answer === 'string') return { result: answer, isError: true }
   const fields = {
     kind: kind as Kind,
     title,
     ...(text(input.detail) ? { detail: text(input.detail) } : {}),
     ...(text(input.path) ? { path: text(input.path) } : {}),
     ...(text(input.recommendation) ? { recommendation: text(input.recommendation) } : {}),
+    ...(answer ? { answer } : {}),
   }
   let isNew = false
   const changed = await change($, file, entries => {
@@ -313,11 +389,12 @@ async function addItem($: EngineInterface, file: string, input: Record<string, u
     } else {
       const old = entries[at] as Entry
       const merged: Entry = { ...old, ...fields, done: false }
-      // A new recommendation is a new question: the answer to the old one goes.
-      if (fields.recommendation !== undefined && fields.recommendation !== old.recommendation) {
-        delete merged.response
-        delete merged.respondedAt
-      }
+      // A new recommendation, or other options to pick from, is a new
+      // question: the answer to the old one goes.
+      const isAsking =
+        (fields.recommendation !== undefined && fields.recommendation !== old.recommendation) ||
+        (answer !== undefined && JSON.stringify(answer) !== JSON.stringify(readAnswer(old.answer ?? undefined)))
+      if (isAsking) for (const key of ['response', 'selected', 'note', 'respondedAt']) delete merged[key]
       entries[at] = merged
     }
 
@@ -382,7 +459,19 @@ export const register: Register = (on, options) => {
             title: { type: 'string', description: 'One line saying what is needed from them' },
             detail: { type: 'string', description: 'One or two sentences of context' },
             path: { type: 'string', description: 'Full path of the file or folder to look at' },
-            recommendation: { type: 'string', description: 'What you recommend; the pane shows it with Accept and Reject buttons' },
+            recommendation: { type: 'string', description: 'What you recommend, in one sentence; the pane shows it above the buttons' },
+            answer_type: {
+              type: 'string',
+              enum: ANSWERS,
+              description:
+                'The answer you need, which the pane draws a control for. confirm: yes or no. choice: one of options. multi: any number of options. text: they type it. Leave it out and the kind decides',
+            },
+            options: {
+              type: 'array',
+              items: { type: 'string' },
+              description: `For choice and multi: ${MIN_OPTIONS} to ${MAX_OPTIONS} short labels, each different, at most ${MAX_LABEL} characters`,
+            },
+            recommended: { type: 'array', items: { type: 'string' }, description: 'The options you would pick, as written in options (one for choice)' },
           },
           required: ['id', 'kind', 'title'],
         },
