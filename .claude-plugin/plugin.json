@@ -1,7 +1,7 @@
 {
   "name": "attention-panel",
-  "version": "0.4.0",
-  "description": "Side pane listing the action items in the current project that need your attention",
+  "version": "0.5.0",
+  "description": "Side pane listing what is waiting on you in the current project, where you answer with buttons, ticks or a typed line",
   "license": "MIT",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -14,7 +14,7 @@
     "tellClaude": {
       "type": "boolean",
       "title": "Tell Claude when you answer",
-      "description": "After you accept or reject a recommendation in the pane, send Claude a short prompt so it acts on your answer straight away",
+      "description": "After you answer an item in the pane, send Claude a short prompt so it acts on your answer straight away",
       "default": true
     },
     "instructClaude": {

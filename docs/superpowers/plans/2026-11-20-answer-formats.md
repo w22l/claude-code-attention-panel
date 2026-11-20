@@ -185,4 +185,4 @@ Each line names its owning task; the test is listed in that task.
 
 ## Notes
 
-(Task 1 Step 5 findings go here.)
+**The tool-server timeout (Task 1 Step 5).** Not reproduced: no debug log exists for the session it happened in. What is known: in that same start-up three unrelated MCP servers (n8n-mcp, newsapi, playwright) failed with the same 30-second `CONNECT_TIMEOUT`, while the mod itself was running (pane, presses and prompts all worked). That points at a crowded start-up on the machine, not at the mod. Shipped anyway: `git` is run once per session, and the start waits at most one second for the first read. README Troubleshooting has a row for it.

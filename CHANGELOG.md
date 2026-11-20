@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.0
+
+Answers that fit the question. An item is no longer only accepted or rejected.
+
+- Claude says what kind of answer an item needs, and the pane draws the control for it: yes or no (`confirm`), one of several options (`choice`), several at once (`multi`, with ticks and a Submit), or a field to type in (`text`). `attention_add` takes `answer_type`, `options` and `recommended`.
+- Items without a recommendation can be answered too: **Approve** / **Reject** on a sign-off, **Done** on a blocked item and **Reviewed** on a review item, which also close it.
+- **Reply…** on every item opens a field for an answer in your own words; **Change** takes an answer back.
+- Your answer is written to the item as `response`, `selected` and `note`. The prompt sent to Claude still carries the item's id and nothing from the file, nor what you typed.
+- An answer is refused when the item was reworded or its options changed after the pane drew it.
+- Each open item shows how long it has waited.
+- Hardening: every change to the list goes through one path that never throws, so a read-only or vanished file is a message, not a failed hook; `git` is asked for the project root once per session instead of on every read; a file that has not changed costs one read; the session's start waits at most a second for the first read; two items with one id no longer blank the pane, and are flagged.
+- `attention_add` now refuses an id it could not name in a prompt (anything but letters, digits, dots, dashes and underscores).
+- Thirty-one new tests.
+
 ## 0.4.0
 
 The list now keeps itself, in every project, without a line in `CLAUDE.md`.
