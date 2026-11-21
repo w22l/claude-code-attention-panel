@@ -427,22 +427,28 @@ async function answer(
     if (shownOf(view) !== seen) return MOVED
     const format = formatOf(view)
     hasRecommendation = Boolean(view.recommendation)
+    // Only what this answer gives goes onto the item. A note or picks already
+    // there were not the person's, and are taken off so the answer does not
+    // vouch for them.
+    const given: Record<string, unknown> = {}
     if ('response' in reply) {
       if (format.type !== 'confirm' || (reply.response === 'rejected' && !format.negative)) return MOVED
-      item.response = reply.response
-      if (format.isClosing) item.done = true
+      given.response = reply.response
+      if (format.isClosing) given.done = true
     } else if ('selected' in reply) {
       const isOne = format.type === 'choice' && reply.selected.length === 1
       const isSome = format.type === 'multi' && reply.selected.length > 0
       if (!(isOne || isSome) || reply.selected.some(label => !format.options.includes(label))) return MOVED
-      item.response = 'answered'
+      given.response = 'answered'
       // Kept in the order the options are listed, whatever order they were ticked in.
-      item.selected = format.options.filter(label => reply.selected.includes(label))
+      given.selected = format.options.filter(label => reply.selected.includes(label))
     } else {
       if (reply.note.trim() === '') return 'Type an answer first.'
-      item.response = 'answered'
-      item.note = reply.note
+      given.response = 'answered'
+      given.note = reply.note
     }
+    for (const key of ['response', 'selected', 'note', 'respondedAt']) delete item[key]
+    Object.assign(item, given)
     item.respondedAt = new Date().toISOString()
 
     return undefined

@@ -12,7 +12,7 @@ Answers that fit the question. An item is no longer only accepted or rejected.
 - Each open item shows how long it has waited.
 - Hardening: every change to the list goes through one path that does not throw, so a read-only or vanished file is a message, not a failed hook; `git` is asked for the project root once per session instead of on every read; a file that has not changed costs one read; the session's start waits at most a second for the first read; two items with one id no longer blank the pane, and are flagged.
 - `attention_add` now refuses an id it could not name in a prompt (anything but letters, digits, dots, dashes and underscores).
-- Thirty-five new tests.
+- Thirty-six new tests.
 
 ## 0.4.0
 
