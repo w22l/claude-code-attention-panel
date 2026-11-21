@@ -30,6 +30,9 @@ const MAX_LABEL = 60
 // An id the mod can name in a prompt it sends for the person.
 const SAFE_ID = /^[A-Za-z0-9._-]{1,64}$/
 // Theme keys, so the headings follow the person's Claude Code theme.
+// The colour a command is drawn in: the one the prompt uses for a shell line.
+const COMMAND = 'bashBorder'
+
 const TINT: Record<Group, 'error' | 'warning' | 'success' | 'suggestion' | 'inactive'> = {
   blocked: 'error',
   decision: 'warning',
@@ -56,7 +59,7 @@ const instruction = (file: string): string =>
     '# Action items for the project owner',
     `This project keeps a list of what is waiting on the person at ${file}; a pane beside the chat shows it.`,
     'Whenever you need something only they can give (a decision, a sign-off, a review, or a step only they can take), add it to the list in the same turn in which you ask, before you finish your reply. If a reply asks for three things, the list gains three items.',
-    `Add an item with the ${ADD_TOOL} tool (id, kind, title, and where useful detail, path and recommendation); kind is one of blocked, decision, sign-off, review. Give path as a full path to the file to look at. When an item is settled, by them or by events, call ${RESOLVE_TOOL} with its id.`,
+    `Add an item with the ${ADD_TOOL} tool (id, kind, title, and where useful detail, path and recommendation); kind is one of blocked, decision, sign-off, review. Give path as a full path to the file to look at. Put a command they should run between backticks, so the pane sets it apart. When an item is settled, by them or by events, call ${RESOLVE_TOOL} with its id.`,
     `Say what kind of answer you need with answer_type, so they can give it in the pane: confirm (yes or no), choice (one of the options you give), multi (any number of the options you give) or text (they type it). Give ${MIN_OPTIONS} to ${MAX_OPTIONS} short options for choice and multi, and name the ones you would pick in recommended.`,
     'An item with a response has been answered in the pane: read its response, selected (the options they picked) and note (what they typed), act on that answer, then resolve the item.',
     'If you edit the file directly instead, keep it a JSON array and keep every other item as it is. Do not list work you can do yourself.',
@@ -393,6 +396,38 @@ const toggle = ($: EngineInterface, id: string, format: Format, label: string): 
 const setDraft = ($: EngineInterface, id: string, draft: Draft): Promise<unknown> =>
   update($, drafts, all => ({ ...all, [id]: { ...all[id], ...draft } }))
 
+// A line of an item, cut into words and commands, so a command can be drawn
+// in a colour of its own. A command is what stands between backticks, or a
+// shell line written as "! …", which runs to the end of the line.
+type Part = { text: string; isCommand: boolean }
+
+function partsOf(line: string): Part[] {
+  const parts: Part[] = []
+  const push = (text: string, isCommand: boolean): void => {
+    if (text !== '') parts.push({ text, isCommand })
+  }
+  let rest = line
+  for (;;) {
+    const tick = /`([^`\n]+)`/.exec(rest)
+    const bang = /(^|\s)(! \S.*)$/s.exec(rest)
+    const bangAt = bang ? bang.index + (bang[1] ?? '').length : -1
+    if (bang && (!tick || bangAt < tick.index)) {
+      push(rest.slice(0, bangAt), false)
+      push(bang[2] ?? '', true)
+      break
+    }
+    if (!tick) {
+      push(rest, false)
+      break
+    }
+    push(rest.slice(0, tick.index), false)
+    push(tick[1] ?? '', true)
+    rest = rest.slice(tick.index + tick[0].length)
+  }
+
+  return parts
+}
+
 // What the pane draws of an item, as one string: the question as the person
 // saw it. An answer carries it, so a yes cannot land on wording that was
 // rewritten between the drawing and the press.
@@ -595,7 +630,7 @@ export const register: Register = (on, options) => {
             id: { type: 'string', description: 'Short stable identifier, unique in the list, e.g. "choose-region"' },
             kind: { type: 'string', enum: KINDS, description: 'blocked: you cannot continue without it; decision; sign-off; review' },
             title: { type: 'string', description: 'One line saying what is needed from them' },
-            detail: { type: 'string', description: 'One or two sentences of context' },
+            detail: { type: 'string', description: 'One or two sentences of context; put a command they should run between backticks' },
             path: { type: 'string', description: 'Full path of the file or folder to look at' },
             recommendation: { type: 'string', description: 'What you recommend, in one sentence; the pane shows it above the buttons' },
             answer_type: {
@@ -742,6 +777,18 @@ export const register: Register = (on, options) => {
     // The number sits in a column of its own: wrapped lines of the title, detail
     // and path start under the text, never under the number.
     const gutter = String(shown.length).length + 2
+    // A line with a command in it is drawn in pieces, the command in the shell's
+    // colour and never dim; a line without one is drawn whole, as before.
+    const line = (value: string, style: { color?: 'claude'; dimColor?: boolean }) => {
+      const parts = partsOf(value)
+      if (!parts.some(part => part.isCommand)) return <Text {...style}>{value}</Text>
+
+      return (
+        <Text>
+          {parts.map(part => (part.isCommand ? <Text color={COMMAND}>{part.text}</Text> : <Text {...style}>{part.text}</Text>))}
+        </Text>
+      )
+    }
     // Of items sharing an id only the first is drawn with buttons: a press names an id.
     const isFirst = (item: ActionItem): boolean => state.items.find(one => one.id === item.id) === item
 
@@ -926,7 +973,7 @@ export const register: Register = (on, options) => {
                   <Box flexDirection="column" flexGrow={1} flexShrink={1}>
                     <Box flexDirection="row" columnGap={1}>
                       <Box flexShrink={1}>
-                        <Text>{item.title}</Text>
+                        {line(item.title, {})}
                       </Box>
                       {ageOf(item.since, now) !== undefined && (
                         <Box flexShrink={0}>
@@ -934,9 +981,9 @@ export const register: Register = (on, options) => {
                         </Box>
                       )}
                     </Box>
-                    {item.detail && <Text dimColor>{item.detail}</Text>}
+                    {item.detail && line(item.detail, { dimColor: true })}
                     {item.path && <Text dimColor>{item.path}</Text>}
-                    {item.recommendation && !item.response && <Text color="claude">Claude recommends: {item.recommendation}</Text>}
+                    {item.recommendation && !item.response && line(`Claude recommends: ${item.recommendation}`, { color: 'claude' })}
                     {isFirst(item) && (item.response ? answered(item) : controls(item))}
                   </Box>
                 </Box>

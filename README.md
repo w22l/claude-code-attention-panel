@@ -239,7 +239,7 @@ The pane groups open items by kind, in this order:
 | `sign-off` | Sign off | Success colour (green) | Finished work waiting for your approval |
 | `review` | Review | Suggestion colour (blue) | Something worth reading, with no deadline |
 
-The colours are Claude Code theme colours, so they follow whichever theme you use. Open items are numbered down the pane, across the groups, so you can refer to one by number ("do item 3"). A long title, detail or path wraps under its own text, clear of the number. Beside the title the pane shows how long the item has waited, from `since`: `today`, `2d`, `3w`.
+The colours are Claude Code theme colours, so they follow whichever theme you use. Open items are numbered down the pane, across the groups, so you can refer to one by number ("do item 3"). A long title, detail or path wraps under its own text, clear of the number. Beside the title the pane shows how long the item has waited, from `since`: `today`, `2d`, `3w`. A command you are asked to run is drawn in the colour the prompt uses for a shell line, so it stands out from the dim detail around it: anything between backticks, or a line written as `! …` up to its end.
 
 The `answer` field:
 

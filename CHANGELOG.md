@@ -10,9 +10,10 @@ Answers that fit the question. An item is no longer only accepted or rejected.
 - Your answer is written to the item as `response`, `selected` and `note`. The prompt sent to Claude still carries the item's id and nothing from the file, nor what you typed.
 - An answer is refused when the item was reworded or its options changed after the pane drew it.
 - Each open item shows how long it has waited.
+- A command in an item's title, detail or recommendation is drawn in the shell's colour, at full strength: what stands between backticks, or a shell line written as `! …`. Claude is told to put commands between backticks.
 - Hardening: every change to the list goes through one path that does not throw, so a read-only or vanished file is a message, not a failed hook; `git` is asked for the project root once per session instead of on every read; a file that has not changed costs one read; the session's start waits at most a second for the first read; two items with one id no longer blank the pane, and are flagged.
 - `attention_add` now refuses an id it could not name in a prompt (anything but letters, digits, dots, dashes and underscores).
-- Thirty-six new tests.
+- Thirty-seven new tests.
 
 ## 0.4.0
 

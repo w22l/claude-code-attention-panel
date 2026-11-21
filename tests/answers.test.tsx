@@ -619,3 +619,35 @@ test('an answer leaves nothing on the item that the person did not give', async 
   expect(after?.selected).toBeUndefined()
   expect(after?.respondedAt === '2020-01-01T00:00:00.000Z').toBe(false)
 })
+
+test('a command in an item stands out from the words around it', async ($, on) => {
+  const command = '! git config --file "/Volumes/OWC Envoy Ultra/projects/site/.git/config" core.bare false'
+  const world = session(
+    on,
+    list(
+      { id: 'repair', kind: 'blocked', title: 'Run one command to repair the git config', detail: `The checkout says "must be run in a work tree". Run: ${command}` },
+      { id: 'login', kind: 'blocked', title: 'Sign in with `gh auth login` first', detail: 'Then run `npm test` and tell me the result.', recommendation: 'Run `gh auth login` now.' },
+      REGION_PLAIN,
+    ),
+  )
+  await $.session.start(START)
+  expect(world.toasts.length).toBe(0)
+
+  const ui = await $.ui.mount(PANE)
+  const propsOf = async (text: string): Promise<{ color?: unknown; dimColor?: unknown } | undefined> =>
+    // The piece itself, not the line it is part of.
+    ((await ui.findAll({ type: 'Text', text })) as Array<{ text?: string; props?: { color?: unknown; dimColor?: unknown } }>).find(one => one.text === text)?.props
+  const colorOf = async (text: string): Promise<unknown> => (await propsOf(text))?.color
+  // A shell line written as "! …" runs to the end of the field.
+  expect(await colorOf(command)).toBe('bashBorder')
+  // Backticks mark a command anywhere, and are not drawn.
+  expect(await colorOf('gh auth login')).toBe('bashBorder')
+  expect(await colorOf('npm test')).toBe('bashBorder')
+  expect((await propsOf('npm test'))?.dimColor).toBeUndefined()
+  expect((await ui.findAll({ type: 'Text', text: /`/ })).length).toBe(0)
+  // Words without a command are drawn as they were.
+  expect((await ui.find({ type: 'Text', text: 'Three options are compared.' }))?.text).toBe('Three options are compared.')
+  await ui.unmount()
+})
+
+const REGION_PLAIN = { id: 'region', kind: 'decision', title: 'Choose the hosting region', detail: 'Three options are compared.' }
